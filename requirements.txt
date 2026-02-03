@@ -1,0 +1,10 @@
+pandas
+numpy
+scikit-learn
+matplotlib
+jupyter
+ipykernel
+requests
+meteostat
+python-dotenv
+tqdm

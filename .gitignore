@@ -1,0 +1,34 @@
+# Python / Jupyter
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+env/
+*.conda
+.conda/
+
+# OS
+.DS_Store
+
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Data (DO NOT COMMIT)
+data_raw/
+data_processed/
+*.csv
+*.parquet
+*.xlsx
+
+# Reports exports
+reports/*.pdf
+reports/*.html
