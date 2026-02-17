@@ -1,0 +1,38 @@
+{
+  "baseline": {
+    "mae": 10.46,
+    "safe_mape": 19.85
+  },
+  "random_forest_v1": {
+    "mae": 7.9589311469109045,
+    "safe_mape": 17.077527825722758
+  },
+  "split": "train=2018-2021, valid=2022",
+  "pilot_store_ids": [
+    79609,
+    81958,
+    83444,
+    84321,
+    84328,
+    84329,
+    84831,
+    84832
+  ],
+  "n_train": 11062,
+  "n_valid": 2765,
+  "n_features": 12,
+  "feature_cols": [
+    "store_id",
+    "dow",
+    "month",
+    "is_weekend",
+    "tmin",
+    "tmax",
+    "tavg",
+    "prcp",
+    "wspd",
+    "snow",
+    "is_rain",
+    "is_freezing"
+  ]
+}
