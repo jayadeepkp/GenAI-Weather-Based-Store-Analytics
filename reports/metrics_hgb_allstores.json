@@ -1,0 +1,10 @@
+{
+  "model": "HistGradientBoostingRegressor",
+  "target": "invoice_count",
+  "mae": 7.3644603754488,
+  "safe_mape": 18.55957116028851,
+  "n_train": 603834,
+  "n_valid": 152867,
+  "n_stores": 434,
+  "features_count": 34
+}
