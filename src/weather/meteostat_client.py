@@ -11,12 +11,18 @@ from meteostat import Point
 try:
     from meteostat import Daily  # newer versions
 except Exception:
-    from meteostat.daily import Daily  # older versions
+    try:
+        from meteostat.daily import Daily  # older versions
+    except Exception:
+        from meteostat import daily as Daily # new version, but previous two still don't work
+        from meteostat import stations
+        from meteostat import interpolate
 
-
+from ..config import *
+        
 @dataclass(frozen=True)
 class WeatherConfig:
-    cache_dir: Path = Path("data_raw/weather_cache")
+    cache_dir: Path = DATA_RAW / "weather_cache"
     keep_cols: Tuple[str, ...] = ("tavg", "tmin", "tmax", "prcp", "snow", "wspd")
 
 
@@ -42,7 +48,13 @@ def _fetch_daily(lat: float, lon: float, start_date: str, end_date: str) -> pd.D
 
     df = Daily(p, s, e).fetch()
     if df is None or len(df) == 0:
-        return pd.DataFrame({"invoice_date": []})
+        try:
+            # doesn't fetch all the needed rows, but keeps function from returning empty
+            nearby = stations.nearby(p, limit=4)
+            ts = Daily(nearby, s, e)
+            df = interpolate(ts, p).fetch()
+        except:
+            return pd.DataFrame({"invoice_date": []})
 
     df = df.reset_index().rename(columns={"time": "invoice_date"})
     df["invoice_date"] = pd.to_datetime(df["invoice_date"]).dt.normalize()
