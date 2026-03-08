@@ -443,4 +443,8 @@ with tab_forecast:
         )
 
     st.markdown("---")
+<<<<<<< HEAD
     st.caption("Tip: If chat errors, start Ollama with `ollama serve`.")
+=======
+    st.caption("Tip: If chat errors, start Ollama with `ollama serve`.")
+>>>>>>> 9c69427 (Sprint 2: hierarchical HGB models + v2 features, 95% intervals, impact CI tables, demo artifacts, and tests)

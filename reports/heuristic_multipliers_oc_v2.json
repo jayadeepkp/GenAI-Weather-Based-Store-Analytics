@@ -1,0 +1,27 @@
+{
+  "target": "oc_count",
+  "trend_ratio_used": "oc_count_roll7_mean/oc_count_roll28_mean",
+  "rain_mult": {
+    "rain_0": 0.9991228070175439,
+    "rain_heavy": 1.0022522522522523,
+    "rain_light": 1.0013624079353765,
+    "rain_med": 1.0
+  },
+  "snow_mult": {
+    "snow_0": 0.9990347490347492,
+    "snow_heavy": 1.016741406578447
+  },
+  "heat_mult": {
+    "heat_extreme": 1.0027665072004703,
+    "heat_hot": 0.9963054187192119,
+    "heat_na": 0.9995791245791246,
+    "heat_ok": 1.0
+  },
+  "cold_mult": {
+    "cold_cold": 1.0042826748835334,
+    "cold_freezing": 1.0,
+    "cold_na": 0.9995791245791246,
+    "cold_ok": 0.9986187845303868,
+    "cold_vcold": 1.0135746606334841
+  }
+}

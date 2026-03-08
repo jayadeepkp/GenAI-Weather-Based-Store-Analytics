@@ -1,0 +1,28 @@
+{
+  "target": "oc_count",
+  "trend_ratio_used": "oc_count_roll7_mean/oc_count_roll28_mean",
+  "rain_log": {
+    "rain_0": 0.006326870395662345,
+    "rain_heavy": -0.04264374977504827,
+    "rain_light": -0.0067289005556325394,
+    "rain_med": -0.02414906483772602
+  },
+  "snow_log": {
+    "snow_0": 0.0017102350268958372,
+    "snow_heavy": -0.04316302896206899
+  },
+  "heat_log": {
+    "heat_extreme": 0.031061191888053834,
+    "heat_hot": 0.03860501367694,
+    "heat_na": -0.046251695484003374,
+    "heat_ok": -0.008554177580147052
+  },
+  "cold_log": {
+    "cold_cold": -0.024750443750530704,
+    "cold_freezing": -0.027336592661625178,
+    "cold_na": -0.046251695484003374,
+    "cold_ok": 0.009107342543351809,
+    "cold_vcold": -0.04489152835959337
+  },
+  "note": "log-additive heuristic: pred = base_trend * exp(sum(median log effects))"
+}
