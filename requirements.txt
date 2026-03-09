@@ -8,3 +8,4 @@ requests
 meteostat
 python-dotenv
 tqdm
+holidays

@@ -1,30 +1,49 @@
 import pandas as pd
 from pathlib import Path
 
-from .config import *
-from .demand_features import add_demand_features
-from .weather.meteostat_client import get_daily_weather, WeatherConfig
-from .weather.features import add_weather_features
+from config import *
+from store_features import add_store_features
+from demand_features import add_demand_features
+from calendar_features import add_calendar_features
+from weather.meteostat_client import get_daily_weather, WeatherConfig
+from weather.features import add_weather_features
+from lagroll import add_lagroll
 
+# store info data
 store_info = pd.read_csv(DATA_RAW / "store_info.csv")
+store_info = store_info.sort_values(["store_id"]).reset_index(drop=True)
 store_info_cols = list(store_info.columns)
 
+# store performance data
 perf = pd.read_csv(DATA_RAW / "store_performance_2018to2022.csv")
 perf["invoice_date"] = pd.to_datetime(perf["invoice_date"]).dt.normalize()
 perf_cols = ("invoice_count", "oc_count", "fleet_oc_count")
 
 class DatasetBuilder:
-    # many, but not all of the features that have been used for training prototypes
-    location_features = list(set(store_info_cols) - {"invoice_date", "store_id"})
-    calendar_features = ["year", "month", "day_of_year", "dow", "is_weekend"]
-    demand_features = ["inv_lag_1", "inv_lag_7", "inv_rollmean_7", "inv_rollmean_14", "inv_rollmean_28"]
-    weather_features = list(WeatherConfig.keep_cols)
-    default_features = calendar_features + demand_features + weather_features
+    # all of the features listed in reports/metrics_hgb_hierarchical.json
+    default_features = [
+        "store_id",
+        "rain_bucket", "snow_bucket", "heat_bucket", "cold_bucket", "severity",
+        "market_id", "store_state", "time_zone_code", "area_id", "marketing_area_id",
+        "dow", "month", "day_of_year", "is_weekend",
+        "tmin", "tmax", "tavg", "rain_mm", "snow_cm", "wspd", "temp_range",
+        "heavy_rain", "heavy_snow", "extreme_heat", "extreme_cold", "freezing",
+        "heavy_rain_weekend", "heavy_snow_weekend", "extreme_heat_weekend", "snow_freezing",
+        "bay_count", "bay_count_log", "capacity_pressure", "is_closed_day",
+        "heavy_rain_capacity", "heavy_snow_capacity",
+        "freezing_capacity", "extreme_heat_capacity", "extreme_cold_capacity",
+        "invoice_count_lag_1", "invoice_count_lag_7", "invoice_count_lag_14",
+        "invoice_count_rollmean_7", "invoice_count_rollmean_28",
+        "non_fleet_oc_lag_1", "non_fleet_oc_lag_7", "non_fleet_oc_lag_14",
+        "non_fleet_oc_rollmean_7", "non_fleet_oc_rollmean_28",
+        "fleet_oc_count_lag_1", "fleet_oc_count_lag_7", "fleet_oc_count_lag_14",
+        "fleet_oc_count_rollmean_7", "fleet_oc_count_rollmean_28",
+        "rain_mm_lag_1", "rain_mm_rollmean_3", "rain_mm_rollmean_7",
+        "snow_cm_lag_1", "snow_cm_rollmean_3", "snow_cm_rollmean_7",
+        "tmin_lag_1", "tmin_rollmean_3", "tmin_rollmean_7",
+        "tmax_lag_1", "tmax_rollmean_3", "tmax_rollmean_7"
+    ]
 
-    @property
-    def all_features(self):
-        return location_features + calendar_features + demand_features + weather_features
-    
     def __init__(self, *, cutoff="2022-01-01", features=default_features, n_stores=None, store_selectors={}):
         self.cutoff = cutoff
 
@@ -73,23 +92,33 @@ class DatasetBuilder:
         self._features = list(features)
 
         m = self.merged[["store_id", "invoice_date", *perf_cols]].copy()
+        m = m.merge(store_info, on="store_id", how="left")
 
-        # location features
-        location_cols = [c for c in features if c in self.location_features]
-        if len(location_cols) != 0:
-            m = m.merge(store_info[["store_id", *location_cols]], on=["store_id"], how="left")
-        
-        # demand features
-        demand_cols = [c for c in features if c.startswith(("inv_lag_", "inv_rollmean_"))]
-        m = add_demand_features(m, demand_cols)
+        # calendar, store, and demand features
+        m = add_calendar_features(m)
+        m = add_store_features(m)
+        m = add_demand_features(m)
 
         # weather features
-        weather_cols = tuple(f for f in features if f in self.weather_features)
-        weather_df = self.get_weather_df(weather_cols)
+        weather_df = self.get_weather_df()
         m = m.merge(weather_df, on=["store_id", "invoice_date"], how="inner")
-        m = add_weather_features(m) # includes dow, month, and is_weekend
+        m = add_weather_features(m)
 
-        self.merged = m
+        # other derived features
+        m["heavy_rain_capacity"] = m["heavy_rain"] * m["capacity_pressure"]
+        m["heavy_snow_capacity"] = m["heavy_snow"] * m["capacity_pressure"]
+        m["freezing_capacity"] = m["freezing"] * m["capacity_pressure"]
+        m["extreme_heat_capacity"] = m["extreme_heat"] * m["capacity_pressure"]
+        m["extreme_cold_capacity"] = m["extreme_cold"] * m["capacity_pressure"]
+
+        # lagroll features
+        lagroll_features = [f for f in self.features if "lag" in f or "rollmean" in f]
+        m = add_lagroll(m, lagroll_features)
+
+        # trim the merged dataset to conform with setter parameter
+        default_cols = ["store_id", "invoice_date", *perf_cols]
+        m = m[default_cols + [f for f in self.features if f not in default_cols]]
+        self.merged = m.sort_values(["store_id", "invoice_date"]).reset_index(drop=True)
 
     def get_weather_df(self, cols=WeatherConfig.keep_cols):
         # pull data outputted from scripts/pull_weather_allstores.py if it exists
@@ -113,9 +142,9 @@ class DatasetBuilder:
 
         return weather_df
 
-    def to_csv(self, filename=None):
+    def to_file(self, filename=None):
         if filename == None:
-            filename = pd.Timestamp.now().strftime("%Y%m%d%H%M%S") + ".csv"
+            filename = pd.Timestamp.now().strftime("%Y%m%d%H%M%S") + ".parquet"
 
         train_name = "train_" + filename
         valid_name = "valid_" + filename
@@ -126,3 +155,19 @@ class DatasetBuilder:
         else:
             self.train.to_csv(DATA_PROCESSED / train_name, index=False)
             self.valid.to_csv(DATA_PROCESSED / valid_name, index=False)
+
+    def to_csv(self, filename=None):
+        if filename == None:
+            filename = pd.Timestamp.now().strftime("%Y%m%d%H%M%S") + ".csv"
+        elif not filename.endswith(".csv"):
+            filename += ".csv"
+            
+        to_file(filename)
+
+    def to_parquet(self, filename=None):
+        if filename == None:
+            filename = pd.Timestamp.now().strftime("%Y%m%d%H%M%S") + ".parquet"
+        elif not filename.endswith(".parquet"):
+            filename += ".parquet"
+        
+        to_file(filename)

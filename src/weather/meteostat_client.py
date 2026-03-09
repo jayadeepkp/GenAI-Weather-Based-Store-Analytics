@@ -18,7 +18,7 @@ except Exception:
         from meteostat import stations
         from meteostat import interpolate
 
-from ..config import *
+from config import *
         
 @dataclass(frozen=True)
 class WeatherConfig:
