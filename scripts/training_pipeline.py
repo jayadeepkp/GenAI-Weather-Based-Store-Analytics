@@ -4,8 +4,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))
+SRC = ROOT / "src"
+
+for p in [ROOT, SRC]:
+    if str(p) not in sys.path:
+        sys.path.append(str(p))
 
 import argparse
 import json
@@ -22,7 +25,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 
-from src.dataset import DatasetBuilder
+from dataset import DatasetBuilder
 
 
 def safe_mape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1.0) -> float:
@@ -48,7 +51,7 @@ def make_ohe():
 
 def build_feature_sets(df: pd.DataFrame, target: str):
     """
-    Keep existing engineered features from DatasetBuilder output,
+    Keep engineered features from DatasetBuilder output,
     but remove current-day target-like columns to avoid leakage.
     """
     leakage_cols = ["invoice_count", "oc_count", "fleet_oc_count"]
@@ -59,7 +62,21 @@ def build_feature_sets(df: pd.DataFrame, target: str):
     if target not in ["invoice_count", "oc_count"]:
         raise ValueError(f"Unsupported target: {target}")
 
-    categorical_cols = [c for c in ["store_id"] if c in feature_cols]
+    categorical_candidates = [
+        "store_id",
+        "rain_bucket",
+        "snow_bucket",
+        "heat_bucket",
+        "cold_bucket",
+        "severity",
+        "market_id",
+        "store_state",
+        "time_zone_code",
+        "area_id",
+        "marketing_area_id",
+    ]
+
+    categorical_cols = [c for c in categorical_candidates if c in feature_cols]
     numeric_cols = [c for c in feature_cols if c not in categorical_cols]
 
     return feature_cols, categorical_cols, numeric_cols
