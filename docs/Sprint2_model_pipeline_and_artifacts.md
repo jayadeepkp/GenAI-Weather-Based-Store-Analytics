@@ -4,7 +4,9 @@ The goal of Sprint 2 was to transition the project from initial exploratory work
 
 This sprint focused on three major system components:
 	1.	Dataset engineering framework to unify all data sources and feature engineering.
+
 	2.	Hierarchical forecasting models to predict store-level demand.
+
 	3.	Model diagnostics and interpretability analysis to evaluate performance and quantify the impact of weather variables.
 
 By the end of the sprint, the team implemented a complete modeling workflow including dataset construction, model training, prediction generation, error analysis, and feature importance evaluation.
@@ -15,23 +17,32 @@ By the end of the sprint, the team implemented a complete modeling workflow incl
 The overall modeling workflow developed during this sprint is shown below.
 
 Raw Data Sources
+1. Store performance data (2018–2022)
+2. Store metadata
+3. Historical weather data
+
    |
-   |-- Store performance data (2018–2022)
-   |-- Store metadata
-   |-- Historical weather data
-   |
+
    v
 DatasetBuilder (Feature Engineering Layer)
+
    |
+
    v
 Training Pipeline (HGB Baseline Model)
+
    |
+
    v
 Hierarchical Forecasting Pipeline
+
    |
+
    v
 Prediction Outputs + Prediction Intervals
+
    |
+
    v
 Model Diagnostics & Feature Importance Analysis
 
@@ -41,7 +52,7 @@ This architecture separates the system into three core layers:
 	3.	Model evaluation and interpretation
 
 
-## 2. Dataset Engineering Framework (Dylan)
+## 2. Dataset Engineering Framework
 
 A central contribution of this sprint was the implementation of a DatasetBuilder module, which standardizes how the modeling dataset is created.
 
@@ -52,120 +63,120 @@ Data Sources
 The builder integrates multiple data sources:
 
 Store Performance Data
-	•	Daily store transactions
-	•	Invoice counts
-	•	Oil-change counts
+- Daily store transactions
+- Invoice counts
+- Oil-change counts
 
 Store Metadata
-	•	Store location
-	•	Market information
-	•	Operational characteristics
+- Store location
+- Market information
+- Operational characteristics
 
 Weather Data
-	•	Daily weather observations retrieved using Meteostat
-	•	Weather severity classifications
+- Daily weather observations retrieved using Meteostat
+- Weather severity classifications
 
 
 Feature Engineering Pipeline
 
 The DatasetBuilder constructs a modeling dataset by sequentially adding multiple types of features.
 
-## 1. Store Features
+## 2.A. Store Features
 
 Operational characteristics of each store:
-	•	market_id
-	•	store_state
-	•	area_id
-	•	marketing_area_id
-	•	bay_count
-	•	capacity_pressure
+- market_id
+- store_state
+- area_id
+- marketing_area_id
+- bay_count
+- capacity_pressure
 
 These variables capture structural differences between locations.
 
 
-## 2. Calendar Features
+## 2.B. Calendar Features
 
 Calendar-based variables capture recurring demand patterns.
 
 Examples include:
-	•	dow (day of week)
-	•	month
-	•	day_of_year
-	•	is_weekend
+- dow (day of week)
+- month
+- day_of_year
+- is_weekend
 
 These features model seasonal and weekly demand behavior.
 
 
-## 3. Weather Features
+## 2.C. Weather Features
 
 Daily weather conditions are incorporated into the dataset using Meteostat.
 
 Base weather variables include:
-	•	tmin
-	•	tmax
-	•	tavg
-	•	rain_mm
-	•	snow_cm
-	•	wspd
-	•	temp_range
+- tmin
+- tmax
+- tavg
+- rain_mm
+- snow_cm
+- wspd
+- temp_range
 
 These variables allow the model to capture weather-driven demand changes.
 
 
-## 4. Weather Severity Classification
+## 2.D. Weather Severity Classification
 
 To capture nonlinear weather effects, raw weather variables are transformed into severity categories:
 
 Examples:
-	•	sev_normal
-	•	sev_freezing
-	•	sev_snow_heavy
-	•	sev_rain_heavy
-	•	sev_cold_extreme
-	•	sev_heat_extreme
+- sev_normal
+- sev_freezing
+- sev_snow_heavy
+- sev_rain_heavy
+- sev_cold_extreme
+- sev_heat_extreme
 
 These categorical features help the model learn behavioral patterns related to extreme weather events.
 
 
-## 5. Weather Interaction Features
+## 2.E. Weather Interaction Features
 
 Additional derived features represent extreme weather conditions:
 
 Examples include:
-	•	heavy_rain
-	•	heavy_snow
-	•	extreme_heat
-	•	extreme_cold
-	•	snow_freezing
+- heavy_rain
+- heavy_snow
+- extreme_heat
+- extreme_cold
+- snow_freezing
 
 These variables capture more complex weather impacts.
 
 
-## 6. Demand Lag Features
+## 2.F. Demand Lag Features
 
 Lag features represent recent demand history.
 
 Examples:
-	•	invoice_count_lag_1
-	•	invoice_count_lag_7
-	•	invoice_count_lag_14
+- invoice_count_lag_1
+- invoice_count_lag_7
+- invoice_count_lag_14
 
 For oil-change demand:
-	•	non_fleet_oc_lag_1
-	•	fleet_oc_count_lag_7
+- non_fleet_oc_lag_1
+- fleet_oc_count_lag_7
 
 These features capture demand persistence.
 
 
-## 7. Rolling Demand Averages
+## 2.G Rolling Demand Averages
 
 Rolling averages smooth short-term fluctuations.
 
 Examples:
-	•	invoice_count_rollmean_7
-	•	invoice_count_rollmean_28
-	•	non_fleet_oc_rollmean_7
-	•	fleet_oc_count_rollmean_28
+- invoice_count_rollmean_7
+- invoice_count_rollmean_28
+- non_fleet_oc_rollmean_7
+- fleet_oc_count_rollmean_28
 
 These variables represent short-term demand trends.
 
@@ -173,9 +184,10 @@ These variables represent short-term demand trends.
 ## Final Dataset
 
 After feature engineering, the dataset contains:
-	•	67 model features
-	•	Daily observations for each store
-	•	Historical coverage from 2018–2022
+- 67 model features
+- Daily observations for each store
+- Historical coverage from 2018–2022
+
 
 
 ## 3. Time-Based Data Split
@@ -198,11 +210,17 @@ This prevents future data leakage and simulates real operational forecasting con
 A production training script was implemented to train the baseline forecasting model using the DatasetBuilder output.
 
 The pipeline performs the following steps:
+
 	1.	Load dataset from DatasetBuilder
+
 	2.	Extract feature columns
+
 	3.	Apply preprocessing pipeline
+
 	4.	Train baseline model
+
 	5.	Evaluate validation performance
+
 	6.	Save model artifacts
 
 
@@ -213,9 +231,9 @@ The baseline model selected for the sprint is:
 HistGradientBoostingRegressor (HGB)
 
 This model was chosen because it:
-	•	handles large datasets efficiently
-	•	models nonlinear feature relationships
-	•	supports mixed numeric and categorical features
+- handles large datasets efficiently
+- models nonlinear feature relationships
+- supports mixed numeric and categorical features
 
 
 Preprocessing Pipeline
@@ -223,10 +241,10 @@ Preprocessing Pipeline
 The training pipeline includes:
 
 Categorical Features
-	•	encoded using One-Hot Encoding
+- encoded using One-Hot Encoding
 
 Numeric Features
-	•	missing values filled using median imputation
+- missing values filled using median imputation
 
 This preprocessing pipeline ensures the model receives clean numeric inputs.
 
@@ -234,10 +252,10 @@ This preprocessing pipeline ensures the model receives clean numeric inputs.
 Model Outputs
 
 For each target variable the pipeline produces:
-	•	trained model artifact
-	•	validation predictions
-	•	performance metrics
-	•	feature column metadata
+- trained model artifact
+- validation predictions
+- performance metrics
+- feature column metadata
 
 Saved artifacts include:
 
@@ -247,14 +265,14 @@ predictions_valid.csv
 feature_cols.json
 
 
-## 5. Hierarchical Forecasting Model (Jayadeep)
+## 5. Hierarchical Forecasting Model 
 
 The hierarchical forecasting approach extends the baseline model by predicting multiple related targets.
 
 The system predicts:
-	•	invoice traffic
-	•	non-fleet oil-change demand
-	•	fleet oil-change demand
+- invoice traffic
+- non-fleet oil-change demand
+- fleet oil-change demand
 
 These predictions are combined to generate total oil-change forecasts.
 
@@ -262,24 +280,24 @@ These predictions are combined to generate total oil-change forecasts.
 Prediction Outputs
 
 The hierarchical pipeline generates prediction datasets containing:
-	•	actual values
-	•	predicted values
-	•	absolute errors
-	•	prediction intervals
+- actual values
+- predicted values
+- absolute errors
+- prediction intervals
 
 Example output columns:
-	•	pred_invoice
-	•	pred_non_fleet_oc
-	•	pred_fleet_oc
-	•	pred_oc_total
-	•	oc_lower_95
-	•	oc_upper_95
+- pred_invoice
+- pred_non_fleet_oc
+- pred_fleet_oc
+- pred_oc_total
+- oc_lower_95
+- oc_upper_95
 
 Prediction intervals provide uncertainty estimates around forecasts.
 
 
 
-## 6. Model Diagnostics and Error Analysis (Harshini)
+## 6. Model Diagnostics and Error Analysis 
 
 Model performance was analyzed using validation predictions.
 
@@ -290,9 +308,9 @@ The following diagnostic analyses were performed:
 Identifies locations where the model performs poorly.
 
 This analysis helps detect:
-	•	stores with unusual demand patterns
-	•	operational anomalies
-	•	missing store-specific features
+- stores with unusual demand patterns
+- operational anomalies
+- missing store-specific features
 
 ## Error by Month
 
@@ -305,44 +323,46 @@ This analysis reveals whether model accuracy varies during different periods of 
 Stores were grouped by average demand volume.
 
 Results showed that:
-	•	higher-volume stores tend to have larger absolute errors
-	•	relative accuracy remains stable across store groups
+- higher-volume stores tend to have larger absolute errors
+- relative accuracy remains stable across store groups
 
 ## Prediction Bias Analysis
 
 Model bias was evaluated by comparing:
-	•	overpredictions
-	•	underpredictions
+- overpredictions
+- underpredictions
 
 Results indicate a slight overall underprediction tendency.
 
 
-## 7. Feature Importance Analysis (Harshini)
+## 7. Feature Importance Analysis
 
 Permutation feature importance was used to determine which variables most influence predictions.
 
 Most Important Predictors
 
 For invoice traffic:
-	•	invoice_count_rollmean_7
-	•	dow
-	•	invoice_count_rollmean_28
-	•	invoice_count_lag_1
-	•	day_of_year
+- invoice_count_rollmean_7
+- dow
+- invoice_count_rollmean_28
+- invoice_count_lag_1
+- day_of_year
 
 For oil-change demand:
-	•	non_fleet_oc_rollmean_7
-	•	dow
-	•	non_fleet_oc_rollmean_28
-	•	non_fleet_oc_lag_1
-	•	day_of_year
+- non_fleet_oc_rollmean_7
+- dow
+- non_fleet_oc_rollmean_28
+- non_fleet_oc_lag_1
+- day_of_year
 
 These results show that recent demand history and calendar patterns are the strongest predictors.
 
 ## 8. Weather Contribution Analysis
 
 To evaluate the impact of weather features, two models were compared:
+
 	1.	Full model with all features
+
 	2.	Model without weather features
 
 Model Comparison Results
@@ -361,39 +381,42 @@ This confirms that weather improves model accuracy, even though it is not the do
 Demand was analyzed across weather severity categories.
 
 Key observations:
-	•	Extreme cold reduces invoice traffic by ~4.7 visits per day
-	•	Heavy rain reduces traffic by ~3.9 visits
-	•	Heavy snow reduces traffic by ~3.1 visits
-	•	Freezing conditions reduce traffic by ~1.7 visits
+- Extreme cold reduces invoice traffic by ~4.7 visits per day
+- Heavy rain reduces traffic by ~3.9 visits
+- Heavy snow reduces traffic by ~3.1 visits
+- Freezing conditions reduce traffic by ~1.7 visits
 
 Extreme heat shows different behavior, with slightly higher invoice traffic but lower oil-change demand.
 
-⸻
 
 ## 10. Key Insights from Sprint 2
 	1.	Store traffic is primarily driven by recurring demand patterns and short-term demand memory.
+
 	2.	Weather provides secondary but meaningful predictive value.
+
 	3.	Severe cold, snow, and rain conditions generally reduce store visits.
+
 	4.	The forecasting system performs consistently across the validation year.
+
 	5.	The project now has a fully reproducible modeling pipeline.
 
 
 ## 11. Sprint Deliverables
 
 The following components were completed during this sprint:
-	•	DatasetBuilder feature engineering framework
-	•	Production training pipeline
-	•	Hierarchical forecasting model
-	•	Prediction interval generation
-	•	Model diagnostics and bias analysis
-	•	Feature importance evaluation
-	•	Weather impact validation
+- DatasetBuilder feature engineering framework
+- Production training pipeline
+- Hierarchical forecasting model
+- Prediction interval generation
+- Model diagnostics and bias analysis
+- Feature importance evaluation
+- Weather impact validation
 
 
 ## 12. Next Steps
 
 Future work will focus on:
-	•	improving model accuracy
-	•	refining weather interaction features
-	•	incorporating additional operational data
-	•	building a GenAI interface for forecasting queries
+- improving model accuracy
+- refining weather interaction features
+- incorporating additional operational data
+- building a GenAI interface for forecasting queries
