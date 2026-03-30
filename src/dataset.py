@@ -1,5 +1,6 @@
 import pandas as pd
 from pathlib import Path
+import sys
 
 from config import *
 from store_features import add_store_features
@@ -44,9 +45,10 @@ class DatasetBuilder:
         "tmax_lag_1", "tmax_rollmean_3", "tmax_rollmean_7"
     ]
 
-    def __init__(self, *, cutoff="2022-01-01", features=default_features, n_stores=None, store_selectors={}):
+    def __init__(self, *, cutoff="2022-01-01", features=default_features, n_stores=None, store_selectors={}, verbose=False):
         self.cutoff = cutoff
-
+        self.verbose = verbose
+        
         self.select_stores(n_stores, store_selectors)
         
         self.merged = perf[perf.store_id.isin(self.store_ids)].copy()
@@ -91,20 +93,30 @@ class DatasetBuilder:
     def features(self, features):
         self._features = list(features)
 
+        self.print_verbose("Merging store_performance_2018to2022.csv and store_info.csv...")
         m = self.merged[["store_id", "invoice_date", *perf_cols]].copy()
         m = m.merge(store_info, on="store_id", how="left")
 
         # calendar, store, and demand features
+        self.print_verbose("Adding calendar features...")
         m = add_calendar_features(m)
+        
+        self.print_verbose("Adding store metadata features...")
         m = add_store_features(m)
+
+        self.print_verbose("Adding demand features...")
         m = add_demand_features(m)
 
         # weather features
+        self.print_verbose("Adding base weather features...")
         weather_df = self.get_weather_df()
         m = m.merge(weather_df, on=["store_id", "invoice_date"], how="inner")
+
+        self.print_verbose("Adding engineered weather features...")
         m = add_weather_features(m)
 
         # other derived features
+        self.print_verbose("Adding other engineered features...")
         m["heavy_rain_capacity"] = m["heavy_rain"] * m["capacity_pressure"]
         m["heavy_snow_capacity"] = m["heavy_snow"] * m["capacity_pressure"]
         m["freezing_capacity"] = m["freezing"] * m["capacity_pressure"]
@@ -112,13 +124,17 @@ class DatasetBuilder:
         m["extreme_cold_capacity"] = m["extreme_cold"] * m["capacity_pressure"]
 
         # lagroll features
+        self.print_verbose("Adding lag / rolling mean features...")
         lagroll_features = [f for f in self.features if "lag" in f or "rollmean" in f]
         m = add_lagroll(m, lagroll_features)
 
         # trim the merged dataset to conform with setter parameter
-        default_cols = ["store_id", "invoice_date", *perf_cols]
+        self.print_verbose("Trimming dataset to feature selection...")
+        default_cols = ["store_id", "invoice_date", *perf_cols, "non_fleet_oc"]
         m = m[default_cols + [f for f in self.features if f not in default_cols]]
         self.merged = m.sort_values(["store_id", "invoice_date"]).reset_index(drop=True)
+
+        self.verbose = False
 
     def get_weather_df(self, cols=WeatherConfig.keep_cols):
         # pull data outputted from scripts/pull_weather_allstores.py if it exists
@@ -142,10 +158,17 @@ class DatasetBuilder:
 
         return weather_df
 
-    def to_file(self, filename=None):
+    def print_verbose(self, *msg):
+        print(*msg) if self.verbose else None
+    
+    def to_file(self, filename=None, split=True):
         if filename == None:
             filename = pd.Timestamp.now().strftime("%Y%m%d%H%M%S") + ".parquet"
 
+        if not split:
+            self.merged.to_parquet(DATA_PROCESSED / filename, index=False)
+            return
+            
         train_name = "train_" + filename
         valid_name = "valid_" + filename
 
@@ -156,18 +179,18 @@ class DatasetBuilder:
             self.train.to_csv(DATA_PROCESSED / train_name, index=False)
             self.valid.to_csv(DATA_PROCESSED / valid_name, index=False)
 
-    def to_csv(self, filename=None):
+    def to_csv(self, filename=None, split=True):
         if filename == None:
             filename = pd.Timestamp.now().strftime("%Y%m%d%H%M%S") + ".csv"
         elif not filename.endswith(".csv"):
             filename += ".csv"
             
-        to_file(filename)
+        self.to_file(filename, split)
 
-    def to_parquet(self, filename=None):
+    def to_parquet(self, filename=None, split=True):
         if filename == None:
             filename = pd.Timestamp.now().strftime("%Y%m%d%H%M%S") + ".parquet"
         elif not filename.endswith(".parquet"):
             filename += ".parquet"
         
-        to_file(filename)
+        self.to_file(filename, split)
