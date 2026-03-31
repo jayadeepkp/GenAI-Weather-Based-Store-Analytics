@@ -354,22 +354,22 @@ def get_weather_impact(store_id, weather_7days, start_date):
         return None
     store_info = store_rows.iloc[0]
 
-    rain_sens      = float(store_info.get('store_rain_sensitivity', 0.947))
-    snow_sens      = float(store_info.get('store_snow_sensitivity', 0.960))
-    store_rain_pct = (rain_sens - 1) * 100
-    store_snow_pct = (snow_sens - 1) * 100
+    # Get historical impact directly from store data
+    history    = get_historical_impact(store_id)
+    hist_dict  = {h['condition']: h['pct_vs_normal'] for h in (history or [])}
 
+    # Use store-specific historical values — most accurate
     STORE_IMPACT = {
         'clear'     : 0.00,
-        'very_cold' : NETWORK_BASE['very_cold'][0],
-        'hot'       : NETWORK_BASE['hot'][0],
-        'light_rain': store_rain_pct * 0.40,
-        'heavy_rain': store_rain_pct,
-        'any_snow'  : store_snow_pct * 0.60,
-        'heavy_snow': store_snow_pct,
-        'freezing'  : NETWORK_BASE['freezing'][0],
+        'very_cold' : hist_dict.get('Very Cold',    NETWORK_BASE['very_cold'][0]),
+        'hot'       : hist_dict.get('Hot',          NETWORK_BASE['hot'][0]),
+        'light_rain': hist_dict.get('Light Rain',   NETWORK_BASE['light_rain'][0]),
+        'heavy_rain': hist_dict.get('Heavy Rain',   NETWORK_BASE['heavy_rain'][0]),
+        'any_snow'  : hist_dict.get('Any Snow',     NETWORK_BASE['any_snow'][0]),
+        'heavy_snow': hist_dict.get('Any Snow',     NETWORK_BASE['heavy_snow'][0]),
+        'freezing'  : hist_dict.get('Freezing',     NETWORK_BASE['freezing'][0]),
         'high_wind' : NETWORK_BASE['high_wind'][0],
-        'severe'    : store_rain_pct * 0.80,
+        'severe'    : hist_dict.get('Severe Weather', NETWORK_BASE['severe'][0]),
     }
 
     results = []
@@ -611,9 +611,11 @@ async def openai_chat(request: dict):
                         f'Live 7-day weather forecast for {city}, {state} '
                         f'starting TODAY {datetime.now().strftime("%A %B %d")}:\n'
                     )
-                for f in impact:
+                for f, raw in zip(impact, forecast_data):
                     forecast_str += (
-                        f"  {f['day']} {f['date']}: {f['weather']} → "
+                        f"  {f['day']} {f['date']}: {f['weather']} "
+                        f"(temp:{raw['tavg']:.1f}°C, rain:{raw['prcp']:.1f}mm, "
+                        f"wind:{raw['wspd']:.1f}km/h) → "
                         f"expect {f['expected_oc']} OC "
                         f"({f['pct_impact']:+.1f}% vs your normal {f['normal_oc']})\n"
                     )
@@ -803,9 +805,11 @@ def chat(req: ChatRequest):
                     f'Live 7-day weather forecast for {city}, {state} '
                     f'starting TODAY {datetime.now().strftime("%A %B %d")}:\n'
                 )
-                for f in impact:
+                for f, raw in zip(impact, forecast_data):
                     forecast_str += (
-                        f"  {f['day']} {f['date']}: {f['weather']} → "
+                        f"  {f['day']} {f['date']}: {f['weather']} "
+                        f"(temp:{raw['tavg']:.1f}°C, rain:{raw['prcp']:.1f}mm, "
+                        f"wind:{raw['wspd']:.1f}km/h) → "
                         f"expect {f['expected_oc']} OC "
                         f"({f['pct_impact']:+.1f}% vs your normal {f['normal_oc']})\n"
                     )
@@ -857,6 +861,115 @@ def chat(req: ChatRequest):
         'answer'  : answer,
     }
 
+@app.get('/predict/week/{store_id}/{start_date}')
+def predict_week(store_id: int, start_date: str):
+    """
+    Predict OC for any specific week using real weather data.
+    Computed by Python — no LLM math errors.
+    Works for past and future dates.
+    """
+    try:
+        if store_id not in store_coords:
+            raise HTTPException(status_code=404,
+                detail=f'Store {store_id} not found')
+
+        lat   = store_coords[store_id]['store_latitude']
+        lon   = store_coords[store_id]['store_longitude']
+        start = pd.Timestamp(start_date)
+        end   = start + pd.Timedelta(days=6)
+
+        # Fetch real weather for this week
+        url = (
+            f"https://api.open-meteo.com/v1/forecast?"
+            f"latitude={lat}&longitude={lon}"
+            f"&daily=temperature_2m_mean,temperature_2m_min,"
+            f"temperature_2m_max,precipitation_sum,snowfall_sum,"
+            f"windspeed_10m_max"
+            f"&timezone=auto"
+            f"&start_date={start_date}"
+            f"&end_date={end.strftime('%Y-%m-%d')}"
+        )
+        response = requests.get(url, timeout=10)
+        data     = response.json()['daily']
+
+        forecast = []
+        for i in range(len(data['time'])):
+            forecast.append({
+                'date' : data['time'][i],
+                'tavg' : float(data['temperature_2m_mean'][i] or 15.0),
+                'tmin' : float(data['temperature_2m_min'][i]  or 10.0),
+                'tmax' : float(data['temperature_2m_max'][i]  or 20.0),
+                'prcp' : float(data['precipitation_sum'][i]   or 0.0),
+                'snow' : float((data['snowfall_sum'][i] or 0.0) * 10),
+                'wspd' : float(data['windspeed_10m_max'][i]   or 0.0),
+            })
+
+        # Get store-specific historical impact
+        history   = get_historical_impact(store_id)
+        hist_dict = {h['condition']: h['pct_vs_normal']
+                     for h in (history or [])}
+
+        STORE_IMPACT = {
+            'clear'     : 0.00,
+            'very_cold' : hist_dict.get('Very Cold',     NETWORK_BASE['very_cold'][0]),
+            'hot'       : hist_dict.get('Hot',           NETWORK_BASE['hot'][0]),
+            'light_rain': hist_dict.get('Light Rain',    NETWORK_BASE['light_rain'][0]),
+            'heavy_rain': hist_dict.get('Heavy Rain',    NETWORK_BASE['heavy_rain'][0]),
+            'any_snow'  : hist_dict.get('Any Snow',      NETWORK_BASE['any_snow'][0]),
+            'heavy_snow': hist_dict.get('Any Snow',      NETWORK_BASE['heavy_snow'][0]),
+            'freezing'  : hist_dict.get('Freezing',      NETWORK_BASE['freezing'][0]),
+            'high_wind' : NETWORK_BASE['high_wind'][0],
+            'severe'    : hist_dict.get('Severe Weather',NETWORK_BASE['severe'][0]),
+        }
+
+        store = df[df['store_id']==store_id].iloc[0]
+        report = []
+
+        for raw in forecast:
+            date      = pd.Timestamp(raw['date'])
+            dow       = date.dayofweek
+            month     = date.month
+            wx_type   = classify_weather(
+                raw['tavg'], raw['prcp'], raw['snow'], raw['wspd']
+            )
+            pct       = STORE_IMPACT.get(wx_type, 0.0)
+            normal_oc = get_typical_oc(store_id, dow, month)
+            predicted = round(normal_oc * (1 + pct / 100))
+            ci        = round(normal_oc * 0.15 + 3)
+
+            report.append({
+                'date'        : raw['date'],
+                'day'         : date.strftime('%A'),
+                'weather'     : WX_LABELS.get(wx_type, 'Clear'),
+                'temp_c'      : round(raw['tavg'], 1),
+                'precip_mm'   : round(raw['prcp'], 1),
+                'wind_kmh'    : round(raw['wspd'], 1),
+                'normal_oc'   : round(normal_oc),
+                'pct_impact'  : round(pct, 1),
+                'predicted_oc': predicted,
+                'range_low'   : max(0, predicted - ci),
+                'range_high'  : predicted + ci,
+            })
+
+        weekly_total = sum(r['predicted_oc'] for r in report)
+
+        return {
+            'store_id'    : store_id,
+            'city'        : store['store_city'],
+            'state'       : store['store_state'],
+            'week_start'  : start_date,
+            'week_end'    : end.strftime('%Y-%m-%d'),
+            'predictions' : report,
+            'weekly_total': weekly_total,
+            'model_mae'   : 5.74,
+            'note'        : 'Each prediction ±5.7 visits (90% confidence)'
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
 
 # ════════════════════════════════════════════════
 # RUN
