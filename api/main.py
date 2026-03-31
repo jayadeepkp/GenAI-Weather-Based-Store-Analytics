@@ -1,6 +1,7 @@
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from datetime import date
 
 from .utils import *
 
@@ -14,19 +15,31 @@ PREDS22["invoice_date"] = pd.to_datetime(PREDS22["invoice_date"]).dt.normalize()
 BASELINE_OC = build_baseline(data22, "oc_count")
 BASELINE_INV = build_baseline(data22, "invoice_count")
 
-# json request format
+# json request/response format
 class WeatherForecast(BaseModel):
-    tmin: int
-    tmax: int
-    tavg: int
-    prcp: int
-    wspd: int
-    snow: int
+    tmin: float
+    tmax: float
+    tavg: float
+    prcp: float
+    wspd: float
+    snow: float
 
 class PredictReq(BaseModel):
     store_id: int
-    date: str
+    date: date
     weather: WeatherForecast | None = None
+
+class PredictRes(BaseModel):
+    store_id: int
+    date: date
+    pred_invoice: float
+    pred_oc: float
+    oc_lo95: float
+    oc_hi95: float
+    severity: str
+    oc_pchg: float
+    actual_invoice: float | None = None
+    actual_oc: float | None = None
 
 # === main api logic ===
     
@@ -50,7 +63,7 @@ async def get_prediction(req: PredictReq):
         raise HTTPException(status_code=400,
                             detail="Prediction not available. Please select a date on or after 2022-01-02.")
     
-    res = {}
+    res = {"store_id": sid, "date": req.date}
     
     row = PREDS22[(PREDS22["store_id"] == sid) & (PREDS22["invoice_date"] == date)]
 
@@ -90,4 +103,4 @@ async def get_prediction(req: PredictReq):
         res["oc_hi95"] = max(res["pred_oc"] + qhi, 0.0)
 
 
-    return res
+    return PredictRes(**res)

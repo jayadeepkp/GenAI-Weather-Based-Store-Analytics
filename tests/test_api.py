@@ -28,6 +28,8 @@ def test_api_cache_hit():
     assert response.status_code == 200, print(response.json())
 
     body = response.json()
+    assert type(body["store_id"]) == int
+    assert type(body["date"]) == str
     assert type(body["pred_invoice"]) == float and body["pred_invoice"] != float('nan')
     assert type(body["pred_oc"]) == float and body["pred_oc"] != float('nan')
     assert type(body["oc_lo95"]) == float and body["oc_lo95"] != float('nan')
@@ -62,6 +64,8 @@ def test_api_forecast():
     assert response.status_code == 200, print(response.json())
 
     body = response.json()
+    assert type(body["store_id"]) == int
+    assert type(body["date"]) == str
     assert type(body["pred_invoice"]) == float and body["pred_invoice"] != float('nan')
     assert type(body["pred_oc"]) == float and body["pred_oc"] != float('nan')
     assert type(body["oc_lo95"]) == float and body["oc_lo95"] != float('nan')
