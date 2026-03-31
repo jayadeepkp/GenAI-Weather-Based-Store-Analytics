@@ -32,3 +32,4 @@ data_processed/
 # Reports exports
 reports/*.pdf
 reports/*.html
+*.pkl
