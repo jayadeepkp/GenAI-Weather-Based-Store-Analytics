@@ -33,3 +33,5 @@ data_processed/
 reports/*.pdf
 reports/*.html
 *.pkl
+.venv311/
+.venv311/
