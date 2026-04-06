@@ -96,7 +96,7 @@ def test_weather_definitively_impacts_business():
         f"Only {len(significant)} significant conditions — expected at least 5"
     )
 
-    print("✅ Business conclusion: YES — weather impacts OC visits")
+    print("Business conclusion: YES — weather impacts OC visits")
     print(
         f"   Heavy rain: {heavy_rain['Mean % vs Baseline']:.2f}% — SIGNIFICANT"
     )
