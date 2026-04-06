@@ -52,21 +52,21 @@ FEATURES      = models['features']
 FWD_FEATURES  = models['forward_features']
 CATEGORICALS  = models['categoricals']
 label_encoders= models['label_encoders']
-print('✅ Models loaded')
+print(' Models loaded')
 
 # ════════════════════════════════════════════════
 # LOAD DATA
 # ════════════════════════════════════════════════
 print('Loading data...')
 df = pd.read_csv(f'{DATA_PATH}processed_data.csv', parse_dates=['invoice_date'])
-print(f'✅ Data loaded — {len(df):,} rows, {df["store_id"].nunique()} stores')
+print(f' Data loaded — {len(df):,} rows, {df["store_id"].nunique()} stores')
 
 # Load store coordinates
 store_info_df = pd.read_csv(STORE_INFO)
 store_coords  = store_info_df.set_index('store_id')[
     ['store_latitude','store_longitude']
 ].to_dict('index')
-print(f'✅ Store coordinates loaded — {len(store_coords)} stores')
+print(f' Store coordinates loaded — {len(store_coords)} stores')
 
 # ════════════════════════════════════════════════
 # HELPER FUNCTIONS
@@ -627,7 +627,7 @@ async def openai_chat(request: dict):
                         f'Do NOT shift dates — use the exact dates shown above.\n'
                     )
                 system_prompt += forecast_str
-                print(f'✅ Auto-fetched forecast for store {store_id} ({city}, {state})')
+                print(f' Auto-fetched forecast for store {store_id} ({city}, {state})')
     except Exception as e:
         print(f'Auto-forecast warning: {e}')
 
