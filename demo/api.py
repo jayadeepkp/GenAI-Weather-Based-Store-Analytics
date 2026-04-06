@@ -27,13 +27,16 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
+from pathlib import Path
 
 # ════════════════════════════════════════════════
 # PATHS
 # ════════════════════════════════════════════════
-MODEL_PATH = '/Users/jayadeep/GenAI-Weather-Based-Store-Analytics/notebooks/valvoline_production/valvoline_models_production.pkl'
-DATA_PATH  = '/Users/jayadeep/GenAI-Weather-Based-Store-Analytics/notebooks/valvoline_production/'
-STORE_INFO = '/Users/jayadeep/GenAI-Weather-Based-Store-Analytics/data_raw/store_info.csv'
+ROOT = Path(__file__).resolve().parents[1]
+
+MODEL_PATH = ROOT / 'notebooks/valvoline_production/valvoline_models_production.pkl'
+DATA_PATH  = ROOT / 'notebooks/valvoline_production/'
+STORE_INFO = ROOT / 'data_raw/store_info.csv'
 
 # ════════════════════════════════════════════════
 # LOAD MODELS
@@ -58,7 +61,7 @@ print(' Models loaded')
 # LOAD DATA
 # ════════════════════════════════════════════════
 print('Loading data...')
-df = pd.read_csv(f'{DATA_PATH}processed_data.csv', parse_dates=['invoice_date'])
+df = pd.read_csv(f'{DATA_PATH}/processed_data.csv', parse_dates=['invoice_date'])
 print(f' Data loaded — {len(df):,} rows, {df["store_id"].nunique()} stores')
 
 # Load store coordinates
