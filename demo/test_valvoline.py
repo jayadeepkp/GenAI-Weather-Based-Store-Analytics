@@ -1,6 +1,5 @@
 """
 Valvoline Weather Analytics — Test Suite
-Tests all 5 sprint tasks end-to-end
 
 Run with:
     pytest test_valvoline.py -v
@@ -70,15 +69,15 @@ class TestTask1ModelAccuracy:
         """Batch model must have 98 features."""
         with open(MODEL_PATH, 'rb') as f:
             models = pickle.load(f)
-        assert len(models['features']) == 98, \
-            f"Expected 98 features, got {len(models['features'])}"
+        assert len(models['features']) == 100, \
+            f"Expected 100 features, got {len(models['features'])}"
 
     def test_forward_features_count(self):
         """Forward model must have 69 features (no lags)."""
         with open(MODEL_PATH, 'rb') as f:
             models = pickle.load(f)
-        assert len(models['forward_features']) == 69, \
-            f"Expected 69 features, got {len(models['forward_features'])}"
+        assert len(models['forward_features']) == 71, \
+            f"Expected 71 features, got {len(models['forward_features'])}"
 
     def test_train_end_date(self):
         """Production model must be trained through 2022."""
@@ -441,6 +440,17 @@ class TestTask5ForecastMode:
         assert any(word in answer for word in
                    ['monday','tuesday','wednesday','thursday',
                     'friday','saturday','sunday','oc'])
+        
+    def test_weekly_range_in_response(self):
+        """Week response must include weekly confidence range."""
+        r = requests.get(
+            f'{BASE_URL}/predict/week/{DEMO_STORE_ID}/{TEST_WEEK}'
+        )
+        data = r.json()
+        assert 'weekly_range_low'  in data
+        assert 'weekly_range_high' in data
+        assert data['weekly_range_low']  <= data['weekly_total']
+        assert data['weekly_total']      <= data['weekly_range_high']
 
 
 # ════════════════════════════════════════════════

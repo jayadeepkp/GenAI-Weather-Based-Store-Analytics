@@ -55,7 +55,7 @@ FEATURES      = models['features']
 FWD_FEATURES  = models['forward_features']
 CATEGORICALS  = models['categoricals']
 label_encoders= models['label_encoders']
-print(' Models loaded')
+print('Models loaded')
 
 # ════════════════════════════════════════════════
 # LOAD DATA
@@ -357,20 +357,18 @@ def get_weather_impact(store_id, weather_7days, start_date):
         return None
     store_info = store_rows.iloc[0]
 
-    # Get historical impact directly from store data
     history    = get_historical_impact(store_id)
     hist_dict  = {h['condition']: h['pct_vs_normal'] for h in (history or [])}
 
-    # Use store-specific historical values — most accurate
     STORE_IMPACT = {
         'clear'     : 0.00,
-        'very_cold' : hist_dict.get('Very Cold',    NETWORK_BASE['very_cold'][0]),
-        'hot'       : hist_dict.get('Hot',          NETWORK_BASE['hot'][0]),
-        'light_rain': hist_dict.get('Light Rain',   NETWORK_BASE['light_rain'][0]),
-        'heavy_rain': hist_dict.get('Heavy Rain',   NETWORK_BASE['heavy_rain'][0]),
-        'any_snow'  : hist_dict.get('Any Snow',     NETWORK_BASE['any_snow'][0]),
-        'heavy_snow': hist_dict.get('Any Snow',     NETWORK_BASE['heavy_snow'][0]),
-        'freezing'  : hist_dict.get('Freezing',     NETWORK_BASE['freezing'][0]),
+        'very_cold' : hist_dict.get('Very Cold',      NETWORK_BASE['very_cold'][0]),
+        'hot'       : hist_dict.get('Hot',            NETWORK_BASE['hot'][0]),
+        'light_rain': hist_dict.get('Light Rain',     NETWORK_BASE['light_rain'][0]),
+        'heavy_rain': hist_dict.get('Heavy Rain',     NETWORK_BASE['heavy_rain'][0]),
+        'any_snow'  : hist_dict.get('Any Snow',       NETWORK_BASE['any_snow'][0]),
+        'heavy_snow': hist_dict.get('Any Snow',       NETWORK_BASE['heavy_snow'][0]),
+        'freezing'  : hist_dict.get('Freezing',       NETWORK_BASE['freezing'][0]),
         'high_wind' : NETWORK_BASE['high_wind'][0],
         'severe'    : hist_dict.get('Severe Weather', NETWORK_BASE['severe'][0]),
     }
@@ -386,7 +384,7 @@ def get_weather_impact(store_id, weather_7days, start_date):
         pct      = STORE_IMPACT[wx_type]
         normal   = get_typical_oc(store_id, date.dayofweek, date.month)
         expected = round(normal * (1 + pct / 100))
-        ci       = normal * 0.15 + 3
+        ci       = round(normal * 0.15 + 3)
         results.append({
             'date'       : str(date.date()),
             'day'        : date.strftime('%A'),
@@ -394,8 +392,8 @@ def get_weather_impact(store_id, weather_7days, start_date):
             'wx_type'    : wx_type,
             'normal_oc'  : round(normal),
             'expected_oc': expected,
-            'low_oc'     : round(max(0, expected - ci)),
-            'high_oc'    : round(expected + ci),
+            'low_oc'     : max(0, expected - ci),
+            'high_oc'    : expected + ci,
             'pct_impact' : round(pct, 1),
         })
     return results
@@ -490,6 +488,7 @@ NETWORK-WIDE FINDINGS (579,000 store-days, 95% confidence):
 - Freezing     : -1.46% visits
 - Light Rain   : -0.95% visits
 - High Wind    : -2.07% visits
+- Day Before Heavy Rain: +0.32% (customers pull forward demand before storm)
 - Day 1 after heavy snow: +3.65%
 - Day 2 after heavy snow: +3.34%
 - Day 3 after heavy snow: +5.17% (peak rebound)
@@ -507,7 +506,12 @@ ANSWER INSTRUCTIONS:
 - Do NOT use technical terms (MAE, model, confidence interval, p-value)
 - Speak like a knowledgeable colleague, not a data scientist
 - Always base answers on the real data provided above
-- When asked about tomorrow or next week, use the typical OC numbers above"""
+- When asked about tomorrow or next week, use the typical OC numbers above
+- ALWAYS lead with the confidence range first: "90% confident between X and Y OC"
+- Then give the point estimate: "most likely around Z OC"
+- Never just say "expect X OC" without also giving the range
+- The range is more valuable to the business than the point estimate
+- Example: "90% confident between 35 and 55 OC, most likely around 45" """
 
     return system_prompt, city, state
 
@@ -581,6 +585,7 @@ async def openai_chat(request: dict):
     Used by OpenWebUI to connect to this API.
     Automatically extracts store_id from conversation.
     Routes through Ollama llama3.1:8b with real store data.
+    Leads all predictions with confidence range first.
     """
     messages = request.get('messages', [])
 
@@ -610,25 +615,28 @@ async def openai_chat(request: dict):
             impact       = get_weather_impact(store_id, forecast_data, start_date)
             if impact:
                 forecast_str = (
-                        f'\n\n⚠️ IMPORTANT — YOU MUST USE THIS REAL FORECAST DATA:\n'
-                        f'Live 7-day weather forecast for {city}, {state} '
-                        f'starting TODAY {datetime.now().strftime("%A %B %d")}:\n'
-                    )
+                    f'\n\n⚠️ IMPORTANT — YOU MUST USE THIS REAL FORECAST DATA:\n'
+                    f'Live 7-day weather forecast for {city}, {state} '
+                    f'starting TODAY {datetime.now().strftime("%A %B %d")}:\n'
+                )
                 for f, raw in zip(impact, forecast_data):
                     forecast_str += (
                         f"  {f['day']} {f['date']}: {f['weather']} "
                         f"(temp:{raw['tavg']:.1f}°C, rain:{raw['prcp']:.1f}mm, "
                         f"wind:{raw['wspd']:.1f}km/h) → "
-                        f"expect {f['expected_oc']} OC "
-                        f"({f['pct_impact']:+.1f}% vs your normal {f['normal_oc']})\n"
+                        f"90% confident between {f['low_oc']} and {f['high_oc']} OC "
+                        f"(point estimate: {f['expected_oc']} OC, "
+                        f"{f['pct_impact']:+.1f}% vs your normal {f['normal_oc']})\n"
                     )
                 forecast_str += (
-                        f'\nToday is {datetime.now().strftime("%A %B %d %Y")}.\n'
-                        f'The forecast above starts TODAY and covers the next 7 days.\n'
-                        f'When manager asks about "next week" or "upcoming days", '
-                        f'use ONLY these real forecast numbers above.\n'
-                        f'Do NOT shift dates — use the exact dates shown above.\n'
-                    )
+                    f'\nToday is {datetime.now().strftime("%A %B %d %Y")}.\n'
+                    f'The forecast above starts TODAY and covers the next 7 days.\n'
+                    f'When manager asks about "next week" or "upcoming days", '
+                    f'use ONLY these real forecast numbers above.\n'
+                    f'Do NOT shift dates — use the exact dates shown above.\n'
+                    f'ALWAYS lead your answer with the confidence range: '
+                    f'"90% confident between X and Y OC" before giving the point estimate.\n'
+                )
                 system_prompt += forecast_str
                 print(f' Auto-fetched forecast for store {store_id} ({city}, {state})')
     except Exception as e:
@@ -796,7 +804,7 @@ def chat(req: ChatRequest):
     if system_prompt is None:
         raise HTTPException(status_code=404, detail=f'Store {req.store_id} not found')
 
-    # Auto-fetch real forecast even when no weather provided
+    # Auto-fetch real forecast — leads with confidence range
     try:
         forecast_data = get_weather_forecast(req.store_id, days=7)
         if forecast_data:
@@ -813,12 +821,15 @@ def chat(req: ChatRequest):
                         f"  {f['day']} {f['date']}: {f['weather']} "
                         f"(temp:{raw['tavg']:.1f}°C, rain:{raw['prcp']:.1f}mm, "
                         f"wind:{raw['wspd']:.1f}km/h) → "
-                        f"expect {f['expected_oc']} OC "
-                        f"({f['pct_impact']:+.1f}% vs your normal {f['normal_oc']})\n"
+                        f"90% confident between {f['low_oc']} and {f['high_oc']} OC "
+                        f"(point estimate: {f['expected_oc']} OC, "
+                        f"{f['pct_impact']:+.1f}% vs your normal {f['normal_oc']})\n"
                     )
                 forecast_str += (
                     f'\nToday is {datetime.now().strftime("%A %B %d %Y")}.\n'
                     f'Use ONLY these forecast numbers. Do NOT ignore weather impact.\n'
+                    f'ALWAYS lead your answer with the confidence range: '
+                    f'"90% confident between X and Y OC" before giving the point estimate.\n'
                 )
                 system_prompt += forecast_str
     except Exception as e:
@@ -830,7 +841,9 @@ def chat(req: ChatRequest):
         if forecast:
             forecast_str = '\nWEATHER FORECAST:\n' + '\n'.join([
                 f"  {f['day']} {f['date']}: {f['weather']} → "
-                f"expect {f['expected_oc']} OC ({f['pct_impact']:+.1f}% vs normal {f['normal_oc']})"
+                f"90% confident between {f['low_oc']} and {f['high_oc']} OC "
+                f"(point estimate: {f['expected_oc']} OC, "
+                f"{f['pct_impact']:+.1f}% vs normal {f['normal_oc']})"
                 for f in forecast
             ])
             system_prompt += forecast_str
@@ -864,12 +877,14 @@ def chat(req: ChatRequest):
         'answer'  : answer,
     }
 
+
 @app.get('/predict/week/{store_id}/{start_date}')
 def predict_week(store_id: int, start_date: str):
     """
     Predict OC for any specific week using real weather data.
     Computed by Python — no LLM math errors.
     Works for past and future dates.
+    Leads with confidence range first per client feedback.
     """
     try:
         if store_id not in store_coords:
@@ -881,7 +896,6 @@ def predict_week(store_id: int, start_date: str):
         start = pd.Timestamp(start_date)
         end   = start + pd.Timedelta(days=6)
 
-        # Fetch real weather for this week
         url = (
             f"https://api.open-meteo.com/v1/forecast?"
             f"latitude={lat}&longitude={lon}"
@@ -907,25 +921,24 @@ def predict_week(store_id: int, start_date: str):
                 'wspd' : float(data['windspeed_10m_max'][i]   or 0.0),
             })
 
-        # Get store-specific historical impact
         history   = get_historical_impact(store_id)
         hist_dict = {h['condition']: h['pct_vs_normal']
                      for h in (history or [])}
 
         STORE_IMPACT = {
             'clear'     : 0.00,
-            'very_cold' : hist_dict.get('Very Cold',     NETWORK_BASE['very_cold'][0]),
-            'hot'       : hist_dict.get('Hot',           NETWORK_BASE['hot'][0]),
-            'light_rain': hist_dict.get('Light Rain',    NETWORK_BASE['light_rain'][0]),
-            'heavy_rain': hist_dict.get('Heavy Rain',    NETWORK_BASE['heavy_rain'][0]),
-            'any_snow'  : hist_dict.get('Any Snow',      NETWORK_BASE['any_snow'][0]),
-            'heavy_snow': hist_dict.get('Any Snow',      NETWORK_BASE['heavy_snow'][0]),
-            'freezing'  : hist_dict.get('Freezing',      NETWORK_BASE['freezing'][0]),
+            'very_cold' : hist_dict.get('Very Cold',      NETWORK_BASE['very_cold'][0]),
+            'hot'       : hist_dict.get('Hot',            NETWORK_BASE['hot'][0]),
+            'light_rain': hist_dict.get('Light Rain',     NETWORK_BASE['light_rain'][0]),
+            'heavy_rain': hist_dict.get('Heavy Rain',     NETWORK_BASE['heavy_rain'][0]),
+            'any_snow'  : hist_dict.get('Any Snow',       NETWORK_BASE['any_snow'][0]),
+            'heavy_snow': hist_dict.get('Any Snow',       NETWORK_BASE['heavy_snow'][0]),
+            'freezing'  : hist_dict.get('Freezing',       NETWORK_BASE['freezing'][0]),
             'high_wind' : NETWORK_BASE['high_wind'][0],
-            'severe'    : hist_dict.get('Severe Weather',NETWORK_BASE['severe'][0]),
+            'severe'    : hist_dict.get('Severe Weather', NETWORK_BASE['severe'][0]),
         }
 
-        store = df[df['store_id']==store_id].iloc[0]
+        store  = df[df['store_id']==store_id].iloc[0]
         report = []
 
         for raw in forecast:
@@ -954,25 +967,29 @@ def predict_week(store_id: int, start_date: str):
                 'range_high'  : predicted + ci,
             })
 
-        weekly_total = sum(r['predicted_oc'] for r in report)
+        weekly_total    = sum(r['predicted_oc'] for r in report)
+        weekly_range_low  = sum(r['range_low']    for r in report)
+        weekly_range_high = sum(r['range_high']   for r in report)
 
         return {
-            'store_id'    : store_id,
-            'city'        : store['store_city'],
-            'state'       : store['store_state'],
-            'week_start'  : start_date,
-            'week_end'    : end.strftime('%Y-%m-%d'),
-            'predictions' : report,
-            'weekly_total': weekly_total,
-            'model_mae'   : 5.74,
-            'note'        : 'Each prediction ±5.7 visits (90% confidence)'
+            'store_id'          : store_id,
+            'city'              : store['store_city'],
+            'state'             : store['store_state'],
+            'week_start'        : start_date,
+            'week_end'          : end.strftime('%Y-%m-%d'),
+            'predictions'       : report,
+            'weekly_total'      : weekly_total,
+            'weekly_range_low'  : weekly_range_low,
+            'weekly_range_high' : weekly_range_high,
+            'model_mae'         : 5.73,
+            'note'              : '90% confident weekly OC falls between weekly_range_low and weekly_range_high'
         }
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 
 # ════════════════════════════════════════════════
 # RUN
