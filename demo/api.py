@@ -32,11 +32,25 @@ from pathlib import Path
 # ════════════════════════════════════════════════
 # PATHS
 # ════════════════════════════════════════════════
-ROOT = Path(__file__).resolve().parents[1]
 
-MODEL_PATH = ROOT / 'notebooks/valvoline_production/valvoline_models_production.pkl'
-DATA_PATH  = ROOT / 'notebooks/valvoline_production/'
-STORE_INFO = ROOT / 'data_raw/store_info.csv'
+MODEL_PATH  = None
+DATA_PATH   = None
+STORE_INFO  = None
+OLLAMA_PATH = None
+
+if Path('/valvoline').exists():
+    # if api is running in docker container
+    ROOT = Path('/valvoline')
+    MODEL_PATH = ROOT / 'valvoline_models_production.pkl'
+    DATA_PATH  = ROOT
+    STORE_INFO = ROOT / 'store_info.csv'
+    OLLAMA_PATH = 'ollama'
+else:
+    ROOT = Path(__file__).resolve().parents[1]
+    MODEL_PATH = ROOT / 'notebooks/valvoline_production/valvoline_models_production.pkl'
+    DATA_PATH  = ROOT / 'notebooks/valvoline_production/'
+    STORE_INFO = ROOT / 'data_raw/store_info.csv'
+    OLLAMA_PATH = 'localhost'
 
 # ════════════════════════════════════════════════
 # LOAD MODELS
@@ -654,7 +668,7 @@ async def openai_chat(request: dict):
     # Call Ollama
     try:
         response = requests.post(
-            'http://localhost:11434/api/chat',
+            f'http://{OLLAMA_PATH}:11434/api/chat',
             json={
                 'model'   : 'llama3.1:8b',
                 'messages': ollama_messages,
@@ -850,7 +864,7 @@ def chat(req: ChatRequest):
 
     try:
         response = requests.post(
-            'http://localhost:11434/api/chat',
+            f'http://{OLLAMA_PATH}:11434/api/chat',
             json={
                 'model'   : 'llama3.1:8b',
                 'messages': [

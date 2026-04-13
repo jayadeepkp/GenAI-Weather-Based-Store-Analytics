@@ -1,0 +1,64 @@
+# docker-compose.yml : Set up the full project stack.
+#
+# If it's your first time setting up this project, please navigate to
+# docs/run_demo.md and follow the instructions there.
+#
+# Otherwise, you can set up the local environment like so:
+# docker compose up -d
+#
+# Or, if you want to set up a public demo with Ngrok:
+# docker compose --profile demo up
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: ./demo/Dockerfile
+    command: uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    depends_on:
+      - ollama
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+  ui:
+    image: ghcr.io/open-webui/open-webui:main
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui:/app/backend/data
+    environment:
+      OPENAI_API_BASE_URL: "http://api:8000/v1"
+      ENABLE_OLLAMA_API: false
+    depends_on:
+      - api
+      - ollama
+  ngrok:
+    image: ngrok/ngrok
+    profiles:
+      - demo
+    command:
+      - "http"
+      - "http://ui:8080"
+      - "--config"
+      - "/run/secrets/ngrok-auth"
+    secrets:
+      - ngrok-auth
+    ports:
+      - "4040:4040"
+    depends_on:
+      - api
+      - ollama
+      - ui
+      
+volumes:
+  open-webui:
+  ollama:
+
+secrets:
+  ngrok-auth:
+    file: ./ngrok.yml
