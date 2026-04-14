@@ -23,6 +23,7 @@ import pandas as pd
 import holidays
 from datetime import datetime, timedelta
 from typing import Optional, List
+from functools import lru_cache
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -39,17 +40,16 @@ STORE_INFO  = None
 OLLAMA_PATH = None
 
 if Path('/valvoline').exists():
-    # if api is running in docker container
-    ROOT = Path('/valvoline')
-    MODEL_PATH = ROOT / 'valvoline_models_production.pkl'
-    DATA_PATH  = ROOT
-    STORE_INFO = ROOT / 'store_info.csv'
+    ROOT        = Path('/valvoline')
+    MODEL_PATH  = ROOT / 'valvoline_models_production.pkl'
+    DATA_PATH   = ROOT
+    STORE_INFO  = ROOT / 'store_info.csv'
     OLLAMA_PATH = 'ollama'
 else:
-    ROOT = Path(__file__).resolve().parents[1]
-    MODEL_PATH = ROOT / 'notebooks/valvoline_production/valvoline_models_production.pkl'
-    DATA_PATH  = ROOT / 'notebooks/valvoline_production/'
-    STORE_INFO = ROOT / 'data_raw/store_info.csv'
+    ROOT        = Path(__file__).resolve().parents[1]
+    MODEL_PATH  = ROOT / 'notebooks/valvoline_production/valvoline_models_production.pkl'
+    DATA_PATH   = ROOT / 'notebooks/valvoline_production/'
+    STORE_INFO  = ROOT / 'data_raw/store_info.csv'
     OLLAMA_PATH = 'localhost'
 
 # ════════════════════════════════════════════════
@@ -59,16 +59,16 @@ print('Loading models...')
 with open(MODEL_PATH, 'rb') as f:
     models = pickle.load(f)
 
-model_B       = models['model_B_oc_regression']
-model_Q05     = models['model_Q05_lower_bound']
-model_Q95     = models['model_Q95_upper_bound']
-model_FWD     = models['model_FWD']
-model_FWD_Q05 = models['model_FWD_Q05']
-model_FWD_Q95 = models['model_FWD_Q95']
-FEATURES      = models['features']
-FWD_FEATURES  = models['forward_features']
-CATEGORICALS  = models['categoricals']
-label_encoders= models['label_encoders']
+model_B        = models['model_B_oc_regression']
+model_Q05      = models['model_Q05_lower_bound']
+model_Q95      = models['model_Q95_upper_bound']
+model_FWD      = models['model_FWD']
+model_FWD_Q05  = models['model_FWD_Q05']
+model_FWD_Q95  = models['model_FWD_Q95']
+FEATURES       = models['features']
+FWD_FEATURES   = models['forward_features']
+CATEGORICALS   = models['categoricals']
+label_encoders = models['label_encoders']
 print('Models loaded')
 
 # ════════════════════════════════════════════════
@@ -76,112 +76,103 @@ print('Models loaded')
 # ════════════════════════════════════════════════
 print('Loading data...')
 df = pd.read_csv(f'{DATA_PATH}/processed_data.csv', parse_dates=['invoice_date'])
-print(f' Data loaded — {len(df):,} rows, {df["store_id"].nunique()} stores')
+print(f'  Data loaded — {len(df):,} rows, {df["store_id"].nunique()} stores')
 
-# Load store coordinates
 store_info_df = pd.read_csv(STORE_INFO)
 store_coords  = store_info_df.set_index('store_id')[
-    ['store_latitude','store_longitude']
+    ['store_latitude', 'store_longitude']
 ].to_dict('index')
-print(f' Store coordinates loaded — {len(store_coords)} stores')
+print(f'  Store coordinates loaded — {len(store_coords)} stores')
 
 # ════════════════════════════════════════════════
-# HELPER FUNCTIONS
+# LOOKUP TABLES (built once at startup)
 # ════════════════════════════════════════════════
 
 store_dow_baseline_lookup = (
-    df.groupby(['store_id','dow'])['store_dow_baseline']
+    df.groupby(['store_id', 'dow'])['store_dow_baseline']
     .first().to_dict()
 )
 store_typical_oc_lookup = (
-    df[df['year']==2022]
-    .groupby(['store_id','dow','month'])['oc_count']
+    df[df['year'] == 2022]
+    .groupby(['store_id', 'dow', 'month'])['oc_count']
     .median().to_dict()
 )
 
+# ════════════════════════════════════════════════
+# CACHED HELPER FUNCTIONS
+# Safe to cache — training data never changes at runtime
+# ════════════════════════════════════════════════
+
+@lru_cache(maxsize=500)
 def get_store_dow_baseline(store_id, dow):
     key = (store_id, dow)
     if key in store_dow_baseline_lookup:
         return float(store_dow_baseline_lookup[key])
-    rows = df[df['store_id']==store_id]['store_dow_baseline']
+    rows = df[df['store_id'] == store_id]['store_dow_baseline']
     return float(rows.mean()) if len(rows) > 0 else 45.0
 
+
+@lru_cache(maxsize=5000)
 def get_typical_oc(store_id, dow, month):
     key = (store_id, dow, month)
     if key in store_typical_oc_lookup:
         return float(store_typical_oc_lookup[key])
     return get_store_dow_baseline(store_id, dow)
 
-def classify_weather(tavg, prcp, snow, wspd):
-    has_heavy_rain = prcp > 10
-    has_rain       = prcp > 0.1
-    has_heavy_snow = snow > 150 and tavg <= 2
-    has_snow       = snow > 0   and tavg <= 2
-    is_freezing    = tavg <= 0
-    is_very_cold   = 0  < tavg <= 7
-    is_hot         = 27 < tavg <= 35
-    has_high_wind  = wspd > 30
-    severity = 0
-    if is_freezing:    severity += 2
-    elif is_very_cold: severity += 1
-    if has_heavy_snow: severity += 2
-    elif has_snow:     severity += 1
-    if has_heavy_rain: severity += 1
-    if has_high_wind:  severity += 1
-    if severity >= 3:  return 'severe'
-    if has_heavy_snow: return 'heavy_snow'
-    if has_snow:       return 'any_snow'
-    if has_heavy_rain: return 'heavy_rain'
-    if has_rain:       return 'light_rain'
-    if has_high_wind:  return 'high_wind'
-    if is_freezing:    return 'freezing'
-    if is_very_cold:   return 'very_cold'
-    if is_hot:         return 'hot'
-    return 'clear'
 
-def get_weather_forecast(store_id, days=7):
-    """
-    Fetch real weather forecast for a store using Open-Meteo API.
-    Uses store's actual lat/lon coordinates.
-    Free — no API key needed.
-    Same units as Meteostat: Celsius, mm precipitation.
-    """
-    if store_id not in store_coords:
+@lru_cache(maxsize=500)
+def get_historical_impact(store_id):
+    """Returns tuple of tuples (hashable) for lru_cache."""
+    store_rows = df[df['store_id'] == store_id]
+    if len(store_rows) == 0:
         return None
 
-    lat = store_coords[store_id]['store_latitude']
-    lon = store_coords[store_id]['store_longitude']
+    store_data = df[
+        (df['store_id'] == store_id) &
+        (df['is_abnormal_day'] == 0) &
+        (df['oc_count'] > 0)
+    ]
+    normal_avg = store_data[store_data['severity'] == 0]['oc_count'].mean()
 
-    try:
-        url = (
-            f"https://api.open-meteo.com/v1/forecast?"
-            f"latitude={lat}&longitude={lon}"
-            f"&daily=temperature_2m_max,temperature_2m_min,"
-            f"temperature_2m_mean,precipitation_sum,snowfall_sum,"
-            f"windspeed_10m_max"
-            f"&timezone=auto"
-            f"&forecast_days={days}"
-        )
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()['daily']
+    conditions = {
+        'Normal (no weather)': store_data['severity'] == 0,
+        'Light Rain'         : (store_data['has_rain'] == 1) & (store_data['has_heavy_rain'] == 0),
+        'Heavy Rain'         : store_data['has_heavy_rain'] == 1,
+        'Any Snow'           : store_data['has_snow'] == 1,
+        'Freezing'           : store_data['is_freezing'] == 1,
+        'Very Cold'          : store_data['is_very_cold'] == 1,
+        'Hot'                : store_data['is_hot'] == 1,
+        'Severe Weather'     : store_data['severity'] >= 3,
+    }
 
-        forecast = []
-        for i in range(min(days, len(data['time']))):
-            forecast.append({
-                'date' : data['time'][i],
-                'tavg' : float(data['temperature_2m_mean'][i] or 15.0),
-                'tmin' : float(data['temperature_2m_min'][i]  or 10.0),
-                'tmax' : float(data['temperature_2m_max'][i]  or 20.0),
-                'prcp' : float(data['precipitation_sum'][i]   or 0.0),
-                'snow' : float((data['snowfall_sum'][i] or 0.0) * 10),
-                'wspd' : float(data['windspeed_10m_max'][i]   or 0.0),
-            })
-        return forecast
-    except Exception as e:
-        print(f'Weather forecast error for store {store_id}: {e}')
+    results = []
+    for label, mask in conditions.items():
+        subset = store_data[mask]['oc_count']
+        if len(subset) < 5:
+            continue
+        avg = subset.mean()
+        pct = (avg - normal_avg) / normal_avg * 100
+        results.append({
+            'condition'    : label,
+            'avg_oc'       : round(avg, 1),
+            'pct_vs_normal': round(pct, 1),
+            'n_days'       : len(subset),
+        })
+    # Return as hashable tuple for lru_cache
+    return tuple(tuple(r.items()) for r in results)
+
+
+def get_historical_impact_list(store_id):
+    """Returns list of dicts — use this everywhere in the code."""
+    raw = get_historical_impact(store_id)
+    if raw is None:
         return None
+    return [dict(r) for r in raw]
 
+
+# ════════════════════════════════════════════════
+# WEATHER HELPERS
+# ════════════════════════════════════════════════
 
 NETWORK_BASE = {
     'clear'     : ( 0.00, 0.06),
@@ -210,12 +201,76 @@ WX_LABELS = {
 }
 
 
+def classify_weather(tavg, prcp, snow, wspd):
+    has_heavy_rain = prcp > 10
+    has_rain       = prcp > 0.1
+    has_heavy_snow = snow > 150 and tavg <= 2
+    has_snow       = snow > 0   and tavg <= 2
+    is_freezing    = tavg <= 0
+    is_very_cold   = 0  < tavg <= 7
+    is_hot         = 27 < tavg <= 35
+    has_high_wind  = wspd > 30
+    severity = 0
+    if is_freezing:    severity += 2
+    elif is_very_cold: severity += 1
+    if has_heavy_snow: severity += 2
+    elif has_snow:     severity += 1
+    if has_heavy_rain: severity += 1
+    if has_high_wind:  severity += 1
+    if severity >= 3:  return 'severe'
+    if has_heavy_snow: return 'heavy_snow'
+    if has_snow:       return 'any_snow'
+    if has_heavy_rain: return 'heavy_rain'
+    if has_rain:       return 'light_rain'
+    if has_high_wind:  return 'high_wind'
+    if is_freezing:    return 'freezing'
+    if is_very_cold:   return 'very_cold'
+    if is_hot:         return 'hot'
+    return 'clear'
+
+
+def get_weather_forecast(store_id, days=7):
+    """Fetch real weather forecast via Open-Meteo. Free, no API key needed."""
+    if store_id not in store_coords:
+        return None
+    lat = store_coords[store_id]['store_latitude']
+    lon = store_coords[store_id]['store_longitude']
+    try:
+        url = (
+            f"https://api.open-meteo.com/v1/forecast?"
+            f"latitude={lat}&longitude={lon}"
+            f"&daily=temperature_2m_max,temperature_2m_min,"
+            f"temperature_2m_mean,precipitation_sum,snowfall_sum,"
+            f"windspeed_10m_max"
+            f"&timezone=auto"
+            f"&forecast_days={days}"
+        )
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()['daily']
+        forecast = []
+        for i in range(min(days, len(data['time']))):
+            forecast.append({
+                'date': data['time'][i],
+                'tavg': float(data['temperature_2m_mean'][i] or 15.0),
+                'tmin': float(data['temperature_2m_min'][i]  or 10.0),
+                'tmax': float(data['temperature_2m_max'][i]  or 20.0),
+                'prcp': float(data['precipitation_sum'][i]   or 0.0),
+                'snow': float((data['snowfall_sum'][i] or 0.0) * 10),
+                'wspd': float(data['windspeed_10m_max'][i]   or 0.0),
+            })
+        return forecast
+    except Exception as e:
+        print(f'Weather forecast error for store {store_id}: {e}')
+        return None
+
+
 def predict_day_forward(store_id, forecast_date, weather):
     date  = pd.Timestamp(forecast_date)
     dow   = date.dayofweek
     month = date.month
 
-    store_rows = df[df['store_id']==store_id]
+    store_rows = df[df['store_id'] == store_id]
     if len(store_rows) == 0:
         return None
     store_info = store_rows.iloc[0]
@@ -242,7 +297,7 @@ def predict_day_forward(store_id, forecast_date, weather):
 
     severity = 0
     if is_freezing or is_extreme_heat: severity += 2
-    elif is_very_cold or is_hot:        severity += 1
+    elif is_very_cold or is_hot:       severity += 1
     if has_heavy_snow:   severity += 2
     elif has_snow:       severity += 1
     if has_heavy_rain:   severity += 1
@@ -252,44 +307,50 @@ def predict_day_forward(store_id, forecast_date, weather):
     ts      = date
     month_n = ts.month
     day     = ts.day
-    us_hols              = holidays.US(years=[ts.year])
-    is_holiday           = int(ts in us_hols)
-    is_day_before_holiday= int((ts + pd.Timedelta(days=1)) in us_hols)
-    is_day_after_holiday = int((ts - pd.Timedelta(days=1)) in us_hols)
-    is_thanksgiving_week = int(month_n == 11 and 25 <= day <= 26)
-    is_christmas_week    = int(month_n == 12 and 24 <= day <= 26)
-    is_newyear_week      = int(month_n ==  1 and  1 <= day <=  2)
-    is_july4_week        = int(month_n ==  7 and  3 <= day <=  5)
-    is_laborday_week     = int(month_n ==  9 and  1 <= day <=  2)
-    is_memday_week       = int(month_n ==  5 and 27 <= day <= 28)
-    is_blackfriday_week  = int(month_n == 11 and 25 <= day <= 26)
-    p_abn = 0.7 if (is_holiday or is_thanksgiving_week or
-                    is_christmas_week or is_newyear_week) else 0.1
+    us_hols               = holidays.US(years=[ts.year])
+    is_holiday            = int(ts in us_hols)
+    is_day_before_holiday = int((ts + pd.Timedelta(days=1)) in us_hols)
+    is_day_after_holiday  = int((ts - pd.Timedelta(days=1)) in us_hols)
+    is_thanksgiving_week  = int(month_n == 11 and 25 <= day <= 26)
+    is_christmas_week     = int(month_n == 12 and 24 <= day <= 26)
+    is_newyear_week       = int(month_n ==  1 and  1 <= day <=  2)
+    is_july4_week         = int(month_n ==  7 and  3 <= day <=  5)
+    is_laborday_week      = int(month_n ==  9 and  1 <= day <=  2)
+    is_memday_week        = int(month_n ==  5 and 27 <= day <= 28)
+    is_blackfriday_week   = int(month_n == 11 and 25 <= day <= 26)
 
-    s_bay      = int(store_info.get('bay_count', 3))
-    s_market   = store_info.get('market_id', 0)
-    s_area     = store_info.get('area_id', 0)
-    s_region   = store_info.get('region_id', 0)
-    s_mktarea  = store_info.get('marketing_area_id', 0)
-    s_tz       = store_info.get('tz_code', 0)
-    s_sun      = int(store_info.get('is_sunday_closed_store', 0))
-    s_fleet    = float(store_info.get('store_fleet_dependency', 0.067))
-    s_area_oc  = float(store_info.get('area_avg_oc', 45))
-    s_mkt_oc   = float(store_info.get('market_avg_oc', 45))
-    s_vs_area  = float(store_info.get('store_vs_area_demand', 1.0))
-    s_vs_mkt   = float(store_info.get('store_vs_market_demand', 1.0))
-    s_rain_sen = float(store_info.get('store_rain_sensitivity', 0.947))
-    s_snow_sen = float(store_info.get('store_snow_sensitivity', 0.960))
-    s_vol      = float(store_info.get('store_dow_volatility', 5.0))
-    s_growth   = float(store_info.get('store_growth_rate', 1.0))
+    # ── FIX 1: p_abnormal matches training data (0.0 for normal days) ──
+    p_abn = 0.0
+    if (is_holiday or is_thanksgiving_week or is_christmas_week or
+            is_newyear_week or is_day_after_holiday):
+        p_abn = 0.7
+    if is_christmas_week and is_day_before_holiday:
+        p_abn = 1.0
+
+    s_bay     = int(store_info.get('bay_count', 3))
+    s_market  = store_info.get('market_id', 0)
+    s_area    = store_info.get('area_id', 0)
+    s_region  = store_info.get('region_id', 0)
+    s_mktarea = store_info.get('marketing_area_id', 0)
+    s_tz      = store_info.get('tz_code', 0)
+    s_sun     = int(store_info.get('is_sunday_closed_store', 0))
+    s_fleet   = float(store_info.get('store_fleet_dependency', 0.067))
+    s_area_oc = float(store_info.get('area_avg_oc', 45))
+    s_mkt_oc  = float(store_info.get('market_avg_oc', 45))
+    s_vs_area = float(store_info.get('store_vs_area_demand', 1.0))
+    s_vs_mkt  = float(store_info.get('store_vs_market_demand', 1.0))
+    s_rain    = float(store_info.get('store_rain_sensitivity', 0.947))
+    s_snow    = float(store_info.get('store_snow_sensitivity', 0.960))
+    s_vol     = float(store_info.get('store_dow_volatility', 5.0))
+    s_growth  = float(store_info.get('store_growth_rate', 1.0))
 
     feat = {
         'dow': dow, 'month': month_n, 'year': date.year,
         'day_of_year': date.dayofyear,
         'week_of_year': date.isocalendar()[1],
         'quarter': date.quarter,
-        'is_weekend': int(dow >= 5), 'is_monday': int(dow==0),
-        'is_friday': int(dow==4), 'is_saturday': int(dow==5),
+        'is_weekend': int(dow >= 5), 'is_monday': int(dow == 0),
+        'is_friday': int(dow == 4), 'is_saturday': int(dow == 5),
         'is_holiday': is_holiday,
         'is_day_before_holiday': is_day_before_holiday,
         'is_day_after_holiday': is_day_after_holiday,
@@ -330,11 +391,14 @@ def predict_day_forward(store_id, forecast_date, weather):
         'fleet_dep_x_snow': s_fleet * has_heavy_snow,
         'fleet_dep_x_rain': s_fleet * has_heavy_rain,
         'bay_x_severity': s_bay * severity,
-        'store_rain_sensitivity': s_rain_sen,
-        'store_snow_sensitivity': s_snow_sen,
+        'store_rain_sensitivity': s_rain,
+        'store_snow_sensitivity': s_snow,
         'store_dow_volatility': s_vol,
         'store_growth_rate': s_growth,
         'p_abnormal': p_abn,
+        # ── FIX 2: pre-storm features explicitly set ──
+        'next_day_heavy_rain': 0,
+        'next_day_heavy_snow': 0,
     }
 
     for col, le in label_encoders.items():
@@ -346,8 +410,9 @@ def predict_day_forward(store_id, forecast_date, weather):
 
     row_fwd = pd.DataFrame([feat]).reindex(columns=FWD_FEATURES, fill_value=0)
     pred  = float(np.maximum(model_FWD.predict(row_fwd)[0],     0))
-    lower = float(np.maximum(model_FWD_Q05.predict(row_fwd)[0], 0))
-    upper = float(np.maximum(model_FWD_Q95.predict(row_fwd)[0], 0))
+    # ── FIX 3: ensure predicted always within bounds ──
+    lower = float(min(np.maximum(model_FWD_Q05.predict(row_fwd)[0], 0), pred))
+    upper = float(max(np.maximum(model_FWD_Q95.predict(row_fwd)[0], 0), pred))
     pct   = ((pred - typical_oc) / typical_oc * 100) if typical_oc else 0
 
     wx_type = classify_weather(tavg, prcp, snow, wspd)
@@ -366,13 +431,12 @@ def predict_day_forward(store_id, forecast_date, weather):
 
 
 def get_weather_impact(store_id, weather_7days, start_date):
-    store_rows = df[df['store_id']==store_id]
+    store_rows = df[df['store_id'] == store_id]
     if len(store_rows) == 0:
         return None
-    store_info = store_rows.iloc[0]
 
-    history    = get_historical_impact(store_id)
-    hist_dict  = {h['condition']: h['pct_vs_normal'] for h in (history or [])}
+    history   = get_historical_impact_list(store_id)
+    hist_dict = {h['condition']: h['pct_vs_normal'] for h in (history or [])}
 
     STORE_IMPACT = {
         'clear'     : 0.00,
@@ -389,16 +453,17 @@ def get_weather_impact(store_id, weather_7days, start_date):
 
     results = []
     for i, wx in enumerate(weather_7days):
-        date     = pd.Timestamp(start_date) + pd.Timedelta(days=i)
-        tavg     = float(wx.get('tavg', 15))
-        prcp     = float(wx.get('prcp', 0))
-        snow     = float(wx.get('snow', 0))
-        wspd     = float(wx.get('wspd', 0))
-        wx_type  = classify_weather(tavg, prcp, snow, wspd)
-        pct      = STORE_IMPACT[wx_type]
-        normal   = get_typical_oc(store_id, date.dayofweek, date.month)
+        date    = pd.Timestamp(start_date) + pd.Timedelta(days=i)
+        tavg    = float(wx.get('tavg', 15))
+        prcp    = float(wx.get('prcp', 0))
+        snow    = float(wx.get('snow', 0))
+        wspd    = float(wx.get('wspd', 0))
+        wx_type = classify_weather(tavg, prcp, snow, wspd)
+        pct     = STORE_IMPACT[wx_type]
+        normal  = get_typical_oc(store_id, date.dayofweek, date.month)
         expected = round(normal * (1 + pct / 100))
-        ci       = round(normal * 0.15 + 3)
+        # ── FIX 4: CI scaling x1.30 for 90% coverage ──
+        ci = round((normal * 0.15 + 3) * 1.30)
         results.append({
             'date'       : str(date.date()),
             'day'        : date.strftime('%A'),
@@ -413,48 +478,9 @@ def get_weather_impact(store_id, weather_7days, start_date):
     return results
 
 
-def get_historical_impact(store_id):
-    store_rows = df[df['store_id']==store_id]
-    if len(store_rows) == 0:
-        return None
-
-    store_data = df[
-        (df['store_id']==store_id) &
-        (df['is_abnormal_day']==0) &
-        (df['oc_count'] > 0)
-    ]
-    normal_avg = store_data[store_data['severity']==0]['oc_count'].mean()
-
-    conditions = {
-        'Normal (no weather)': store_data['severity']==0,
-        'Light Rain'         : (store_data['has_rain']==1) & (store_data['has_heavy_rain']==0),
-        'Heavy Rain'         : store_data['has_heavy_rain']==1,
-        'Any Snow'           : store_data['has_snow']==1,
-        'Freezing'           : store_data['is_freezing']==1,
-        'Very Cold'          : store_data['is_very_cold']==1,
-        'Hot'                : store_data['is_hot']==1,
-        'Severe Weather'     : store_data['severity']>=3,
-    }
-
-    results = []
-    for label, mask in conditions.items():
-        subset = store_data[mask]['oc_count']
-        if len(subset) < 5:
-            continue
-        avg = subset.mean()
-        pct = (avg - normal_avg) / normal_avg * 100
-        results.append({
-            'condition'    : label,
-            'avg_oc'       : round(avg, 1),
-            'pct_vs_normal': round(pct, 1),
-            'n_days'       : len(subset),
-        })
-    return results
-
-
 def build_system_prompt(store_id):
     """Build rich system prompt with real store data for this store."""
-    store_rows = df[df['store_id']==store_id]
+    store_rows = df[df['store_id'] == store_id]
     if len(store_rows) == 0:
         return None, None, None
 
@@ -466,13 +492,13 @@ def build_system_prompt(store_id):
     rain_pct  = round((rain_sens - 1) * 100, 1)
     snow_pct  = round((snow_sens - 1) * 100, 1)
 
-    history  = get_historical_impact(store_id)
+    history  = get_historical_impact_list(store_id)
     hist_str = '\n'.join([
         f"  {h['condition']}: {h['pct_vs_normal']:+.1f}% ({h['n_days']} days)"
         for h in (history or [])
     ])
 
-    dow_names = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+    dow_names   = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
     typical_str = '\n'.join([
         f"  {name}: {round(get_store_dow_baseline(store_id, i))} OC"
         for i, name in enumerate(dow_names)
@@ -547,7 +573,6 @@ app.add_middleware(
     allow_headers     = ['*'],
 )
 
-
 # ── Request Models ──
 class WeatherDay(BaseModel):
     tavg: float
@@ -580,7 +605,6 @@ class ChatRequest(BaseModel):
 
 @app.get('/v1/models')
 def list_models_openai():
-    """OpenAI-compatible model list — required by OpenWebUI."""
     return {
         'object': 'list',
         'data': [{
@@ -594,39 +618,27 @@ def list_models_openai():
 
 @app.post('/v1/chat/completions')
 async def openai_chat(request: dict):
-    """
-    OpenAI-compatible chat completions endpoint.
-    Used by OpenWebUI to connect to this API.
-    Automatically extracts store_id from conversation.
-    Routes through Ollama llama3.1:8b with real store data.
-    Leads all predictions with confidence range first.
-    """
     messages = request.get('messages', [])
 
-    # Get the last user message
     last_message = ''
     for msg in reversed(messages):
         if msg.get('role') == 'user':
             last_message = msg.get('content', '')
             break
 
-    # Extract store_id from message (5-6 digit number)
     store_match = re.search(r'\b(\d{5,6})\b', last_message)
     store_id    = int(store_match.group(1)) if store_match else 79609
 
-    # Verify store exists — fallback to demo store
     if store_id not in df['store_id'].values:
         store_id = 79609
 
-    # Build system prompt with real store data
     system_prompt, city, state = build_system_prompt(store_id)
 
-    # Auto-fetch real 7-day weather forecast for this store's location
     try:
         forecast_data = get_weather_forecast(store_id, days=7)
         if forecast_data:
-            start_date   = forecast_data[0]['date']
-            impact       = get_weather_impact(store_id, forecast_data, start_date)
+            start_date = forecast_data[0]['date']
+            impact     = get_weather_impact(store_id, forecast_data, start_date)
             if impact:
                 forecast_str = (
                     f'\n\n⚠️ IMPORTANT — YOU MUST USE THIS REAL FORECAST DATA:\n'
@@ -652,20 +664,15 @@ async def openai_chat(request: dict):
                     f'"90% confident between X and Y OC" before giving the point estimate.\n'
                 )
                 system_prompt += forecast_str
-                print(f' Auto-fetched forecast for store {store_id} ({city}, {state})')
+                print(f'  Auto-fetched forecast for store {store_id} ({city}, {state})')
     except Exception as e:
         print(f'Auto-forecast warning: {e}')
 
-    # Build full message list for Ollama
     ollama_messages = [{'role': 'system', 'content': system_prompt}]
     for msg in messages:
         if msg.get('role') in ['user', 'assistant']:
-            ollama_messages.append({
-                'role'   : msg['role'],
-                'content': msg['content']
-            })
+            ollama_messages.append({'role': msg['role'], 'content': msg['content']})
 
-    # Call Ollama
     try:
         response = requests.post(
             f'http://{OLLAMA_PATH}:11434/api/chat',
@@ -673,10 +680,7 @@ async def openai_chat(request: dict):
                 'model'   : 'llama3.1:8b',
                 'messages': ollama_messages,
                 'stream'  : False,
-                'options' : {
-                    'temperature': 0.3,
-                    'num_predict': 400,
-                }
+                'options' : {'temperature': 0.3, 'num_predict': 400}
             },
             timeout=120
         )
@@ -687,7 +691,6 @@ async def openai_chat(request: dict):
     except Exception as e:
         answer = f'Error connecting to Ollama: {str(e)}'
 
-    # Return OpenAI-compatible format
     return {
         'id'     : 'chatcmpl-valvoline',
         'object' : 'chat.completion',
@@ -695,17 +698,10 @@ async def openai_chat(request: dict):
         'model'  : 'valvoline-weather',
         'choices': [{
             'index'        : 0,
-            'message'      : {
-                'role'   : 'assistant',
-                'content': answer
-            },
+            'message'      : {'role': 'assistant', 'content': answer},
             'finish_reason': 'stop'
         }],
-        'usage': {
-            'prompt_tokens'    : 0,
-            'completion_tokens': 0,
-            'total_tokens'     : 0
-        }
+        'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
     }
 
 
@@ -734,13 +730,13 @@ def list_stores():
 
 @app.get('/stores/{store_id}')
 def get_store(store_id: int):
-    rows = df[df['store_id']==store_id]
+    rows = df[df['store_id'] == store_id]
     if len(rows) == 0:
         raise HTTPException(status_code=404, detail=f'Store {store_id} not found')
     store     = rows.iloc[0]
     rain_sens = float(store.get('store_rain_sensitivity', 0.947))
     snow_sens = float(store.get('store_snow_sensitivity', 0.960))
-    dow_names = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+    dow_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
     typical_by_dow = {
         name: round(get_store_dow_baseline(store_id, i))
         for i, name in enumerate(dow_names)
@@ -762,7 +758,7 @@ def predict_impact(req: ImpactRequest):
     results      = get_weather_impact(req.store_id, weather_list, req.start_date)
     if results is None:
         raise HTTPException(status_code=404, detail=f'Store {req.store_id} not found')
-    store = df[df['store_id']==req.store_id].iloc[0]
+    store = df[df['store_id'] == req.store_id].iloc[0]
     return {
         'store_id'  : req.store_id,
         'city'      : store['store_city'],
@@ -782,7 +778,7 @@ def predict_7days(req: ForecastRequest):
         result = predict_day_forward(req.store_id, date, wx.dict())
         if result:
             results.append(result)
-    store = df[df['store_id']==req.store_id].iloc[0]
+    store = df[df['store_id'] == req.store_id].iloc[0]
     return {
         'store_id'  : req.store_id,
         'city'      : store['store_city'],
@@ -794,10 +790,10 @@ def predict_7days(req: ForecastRequest):
 
 @app.post('/predict/historical')
 def predict_historical(store_id: int):
-    results = get_historical_impact(store_id)
+    results = get_historical_impact_list(store_id)
     if results is None:
         raise HTTPException(status_code=404, detail=f'Store {store_id} not found')
-    store     = df[df['store_id']==store_id].iloc[0]
+    store     = df[df['store_id'] == store_id].iloc[0]
     rain_sens = float(store.get('store_rain_sensitivity', 0.947))
     snow_sens = float(store.get('store_snow_sensitivity', 0.960))
     return {
@@ -818,7 +814,6 @@ def chat(req: ChatRequest):
     if system_prompt is None:
         raise HTTPException(status_code=404, detail=f'Store {req.store_id} not found')
 
-    # Auto-fetch real forecast — leads with confidence range
     try:
         forecast_data = get_weather_forecast(req.store_id, days=7)
         if forecast_data:
@@ -894,16 +889,10 @@ def chat(req: ChatRequest):
 
 @app.get('/predict/week/{store_id}/{start_date}')
 def predict_week(store_id: int, start_date: str):
-    """
-    Predict OC for any specific week using real weather data.
-    Computed by Python — no LLM math errors.
-    Works for past and future dates.
-    Leads with confidence range first per client feedback.
-    """
+    """Predict OC for a specific week. Leads with confidence range."""
     try:
         if store_id not in store_coords:
-            raise HTTPException(status_code=404,
-                detail=f'Store {store_id} not found')
+            raise HTTPException(status_code=404, detail=f'Store {store_id} not found')
 
         lat   = store_coords[store_id]['store_latitude']
         lon   = store_coords[store_id]['store_longitude']
@@ -926,18 +915,17 @@ def predict_week(store_id: int, start_date: str):
         forecast = []
         for i in range(len(data['time'])):
             forecast.append({
-                'date' : data['time'][i],
-                'tavg' : float(data['temperature_2m_mean'][i] or 15.0),
-                'tmin' : float(data['temperature_2m_min'][i]  or 10.0),
-                'tmax' : float(data['temperature_2m_max'][i]  or 20.0),
-                'prcp' : float(data['precipitation_sum'][i]   or 0.0),
-                'snow' : float((data['snowfall_sum'][i] or 0.0) * 10),
-                'wspd' : float(data['windspeed_10m_max'][i]   or 0.0),
+                'date': data['time'][i],
+                'tavg': float(data['temperature_2m_mean'][i] or 15.0),
+                'tmin': float(data['temperature_2m_min'][i]  or 10.0),
+                'tmax': float(data['temperature_2m_max'][i]  or 20.0),
+                'prcp': float(data['precipitation_sum'][i]   or 0.0),
+                'snow': float((data['snowfall_sum'][i] or 0.0) * 10),
+                'wspd': float(data['windspeed_10m_max'][i]   or 0.0),
             })
 
-        history   = get_historical_impact(store_id)
-        hist_dict = {h['condition']: h['pct_vs_normal']
-                     for h in (history or [])}
+        history   = get_historical_impact_list(store_id)
+        hist_dict = {h['condition']: h['pct_vs_normal'] for h in (history or [])}
 
         STORE_IMPACT = {
             'clear'     : 0.00,
@@ -952,20 +940,19 @@ def predict_week(store_id: int, start_date: str):
             'severe'    : hist_dict.get('Severe Weather', NETWORK_BASE['severe'][0]),
         }
 
-        store  = df[df['store_id']==store_id].iloc[0]
+        store  = df[df['store_id'] == store_id].iloc[0]
         report = []
 
         for raw in forecast:
             date      = pd.Timestamp(raw['date'])
             dow       = date.dayofweek
             month     = date.month
-            wx_type   = classify_weather(
-                raw['tavg'], raw['prcp'], raw['snow'], raw['wspd']
-            )
+            wx_type   = classify_weather(raw['tavg'], raw['prcp'], raw['snow'], raw['wspd'])
             pct       = STORE_IMPACT.get(wx_type, 0.0)
             normal_oc = get_typical_oc(store_id, dow, month)
             predicted = round(normal_oc * (1 + pct / 100))
-            ci        = round(normal_oc * 0.15 + 3)
+            # ── FIX 4: CI scaling x1.30 for 90% coverage ──
+            ci = round((normal_oc * 0.15 + 3) * 1.30)
 
             report.append({
                 'date'        : raw['date'],
@@ -981,7 +968,7 @@ def predict_week(store_id: int, start_date: str):
                 'range_high'  : predicted + ci,
             })
 
-        weekly_total    = sum(r['predicted_oc'] for r in report)
+        weekly_total      = sum(r['predicted_oc'] for r in report)
         weekly_range_low  = sum(r['range_low']    for r in report)
         weekly_range_high = sum(r['range_high']   for r in report)
 
